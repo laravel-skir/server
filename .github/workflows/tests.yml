@@ -1,0 +1,50 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version:
+          - '8.3'
+          - '8.4'
+          - '8.5'
+
+    steps:
+      - name: Checkout server
+        uses: actions/checkout@v4
+        with:
+          path: server
+
+      - name: Checkout runtime
+        uses: actions/checkout@v4
+        with:
+          repository: laravel-skir/runtime
+          path: runtime
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate Composer configuration
+        run: composer validate --strict
+        working-directory: server
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+        working-directory: server
+
+      - name: Run tests
+        run: composer test
+        working-directory: server

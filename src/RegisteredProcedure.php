@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+namespace LaravelSkir\Server;
+
+use Closure;
+use LaravelSkir\Runtime\MethodDescriptor;
+
+final readonly class RegisteredProcedure
+{
+    private Closure $handler;
+
+    public function __construct(
+        public MethodDescriptor $descriptor,
+        callable $handler,
+    ) {
+        $this->handler = Closure::fromCallable($handler);
+    }
+
+    public function invoke(mixed $request, RequestContext $context): mixed
+    {
+        return ($this->handler)($request, $context);
+    }
+}

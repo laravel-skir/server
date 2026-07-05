@@ -1,0 +1,75 @@
+{
+    "name": "laravel-skir/server",
+    "description": "Laravel SkirRPC server package.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "laravel",
+        "php",
+        "rpc",
+        "serialization",
+        "skir"
+    ],
+    "homepage": "https://github.com/laravel-skir/server",
+    "support": {
+        "issues": "https://github.com/laravel-skir/server/issues",
+        "source": "https://github.com/laravel-skir/server"
+    },
+    "authors": [
+        {
+            "name": "Maxim Kerstens",
+            "email": "maxim.kerstens@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.3",
+        "illuminate/contracts": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/http": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/routing": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/support": "^10.0|^11.0|^12.0|^13.0",
+        "laravel-skir/runtime": "^0.1@dev"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.29",
+        "orchestra/testbench": "^8.0|^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^10.5|^11.5|^12.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "LaravelSkir\\Server\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "LaravelSkir\\Server\\Tests\\": "tests/"
+        }
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../runtime",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [
+                "LaravelSkir\\Server\\SkirServerServiceProvider"
+            ]
+        },
+        "branch-alias": {
+            "dev-main": "0.1.x-dev"
+        }
+    },
+    "scripts": {
+        "format": "pint",
+        "test": "phpunit"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
