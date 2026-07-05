@@ -7,7 +7,6 @@ namespace LaravelSkir\Server\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use JsonException;
-use LaravelSkir\Runtime\DenseJson;
 use LaravelSkir\Runtime\Exceptions\SkirRuntimeException;
 use LaravelSkir\Server\Exceptions\SkirServerException;
 use LaravelSkir\Server\RequestContext;
@@ -25,12 +24,13 @@ final readonly class SkirRpcController
         try {
             $payload = $this->payloadFromRequest($request);
             $method = $this->methodFromPayload($payload);
-            $procedure = $this->server->procedure($method);
-            $decodedRequest = DenseJson::decode($procedure->descriptor->requestType, $payload['request'] ?? 0);
+            $server = $this->serverFromRequest($request);
+            $procedure = $server->procedure($method);
+            $decodedRequest = $server->codec()->decodeRequest($procedure->descriptor, $payload['request'] ?? 0);
             $result = $procedure->invoke($decodedRequest, new RequestContext($request, $procedure->descriptor));
 
             return response()->json(
-                DenseJson::encode($procedure->descriptor->responseType, $result),
+                $server->codec()->encodeResponse($procedure->descriptor, $result),
                 Response::HTTP_OK,
             );
         } catch (SkirServerException $exception) {
@@ -38,6 +38,17 @@ final readonly class SkirRpcController
         } catch (SkirRuntimeException $exception) {
             return SkirServerException::invalidRequest($exception->getMessage())->toResponse();
         }
+    }
+
+    private function serverFromRequest(Request $request): SkirServer
+    {
+        $server = $request->route()?->defaults['skirServer'] ?? null;
+
+        if ($server instanceof SkirServer) {
+            return $server;
+        }
+
+        return $this->server;
     }
 
     /**

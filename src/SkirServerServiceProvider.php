@@ -6,6 +6,8 @@ namespace LaravelSkir\Server;
 
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
+use LaravelSkir\Server\Codecs\DenseJsonCodec;
+use LaravelSkir\Server\Codecs\SkirCodec;
 use LaravelSkir\Server\Http\Controllers\SkirRpcController;
 
 final class SkirServerServiceProvider extends ServiceProvider
@@ -13,6 +15,7 @@ final class SkirServerServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(ProcedureRegistry::class);
+        $this->app->singleton(SkirCodec::class, DenseJsonCodec::class);
         $this->app->singleton(SkirServer::class);
     }
 
@@ -21,9 +24,29 @@ final class SkirServerServiceProvider extends ServiceProvider
         /** @var Router $router */
         $router = $this->app['router'];
 
-        $router->macro('skirRpc', function (string $uri) {
+        $router->macro('skirRpc', function (string $uri, array $providers = [], ?SkirCodec $codec = null) {
             /** @var Router $this */
-            return $this->match(['GET', 'POST'], $uri, SkirRpcController::class);
+            $route = $this->match(['GET', 'POST'], $uri, SkirRpcController::class);
+
+            if ($providers === []) {
+                if ($codec === null) {
+                    return $route;
+                }
+            }
+
+            $server = new SkirServer(new ProcedureRegistry, $codec ?? app(SkirCodec::class));
+
+            foreach ($providers as $provider) {
+                $resolvedProvider = is_string($provider) ? app($provider) : $provider;
+
+                if (! $resolvedProvider instanceof ProcedureProvider) {
+                    continue;
+                }
+
+                $resolvedProvider->register($server);
+            }
+
+            return $route->defaults('skirServer', $server);
         });
     }
 }

@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace LaravelSkir\Server;
 
 use LaravelSkir\Runtime\MethodDescriptor;
+use LaravelSkir\Server\Codecs\DenseJsonCodec;
+use LaravelSkir\Server\Codecs\SkirCodec;
 
 final readonly class SkirServer
 {
     public function __construct(
         private ProcedureRegistry $procedures,
+        private SkirCodec $codec = new DenseJsonCodec,
     ) {}
 
     public function addMethod(MethodDescriptor $descriptor, callable $handler): void
@@ -20,6 +23,11 @@ final readonly class SkirServer
     public function procedure(string $method): RegisteredProcedure
     {
         return $this->procedures->get($method);
+    }
+
+    public function codec(): SkirCodec
+    {
+        return $this->codec;
     }
 
     /**
