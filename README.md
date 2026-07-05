@@ -46,26 +46,34 @@ For every module that contains methods, the generator writes:
 
 ```text
 app/SkirGenerated/Admin/SkirMethods.php
+app/SkirGenerated/Admin/AbstractSkirProcedures.php
 app/SkirGenerated/Admin/SkirProcedures.php
 app/SkirGenerated/Admin/SkirProcedureProvider.php
 ```
 
 Make sure the output directory is covered by Composer autoloading. For example, map `App\\Skir\\` to `app/SkirGenerated/` or choose an output directory that already matches your app's autoload setup.
 
-`SkirProcedures.php` is the interface your application implements. With `skir-laravel-data-generator`, it looks like this:
+`AbstractSkirProcedures.php` is the base class your application extends. With `skir-laravel-data-generator`, it looks like this:
 
 ```php
 namespace App\Skir\Admin;
 
+use LaravelSkir\Server\ProcedureProvider;
 use LaravelSkir\Server\RequestContext;
+use LaravelSkir\Server\SkirServer;
 
-interface SkirProcedures
+abstract class AbstractSkirProcedures implements ProcedureProvider
 {
-    public function getUser(GetUserRequestData $request, RequestContext $context): UserData;
+    abstract public function getUser(GetUserRequestData $request, RequestContext $context): UserData;
+
+    public function register(SkirServer $server): void
+    {
+        // Generated method registration and payload conversion lives here.
+    }
 }
 ```
 
-Implement it in your app code:
+Implement the generated abstract class in your app code:
 
 ```php
 namespace App\Skir\Admin;
@@ -73,7 +81,7 @@ namespace App\Skir\Admin;
 use App\Models\User as UserModel;
 use LaravelSkir\Server\RequestContext;
 
-final class AdminProcedures implements SkirProcedures
+final class AdminProcedures extends AbstractSkirProcedures
 {
     public function getUser(GetUserRequestData $request, RequestContext $context): UserData
     {
@@ -87,47 +95,53 @@ final class AdminProcedures implements SkirProcedures
 }
 ```
 
-Bind the generated interface to your implementation:
+Register your procedure class directly on an endpoint:
 
 ```php
 use App\Skir\Admin\AdminProcedures;
-use App\Skir\Admin\SkirProcedures;
+use Illuminate\Support\Facades\Route;
 
-$this->app->bind(SkirProcedures::class, AdminProcedures::class);
+Route::skirRpc('/api/skir', [
+    AdminProcedures::class,
+]);
 ```
 
-Register the generated provider on an endpoint:
+The generated abstract class handles the repetitive work:
+
+- Registers every generated `SkirMethods::*()` descriptor with the endpoint.
+- Hydrates incoming payloads into generated request DTOs.
+- Calls your concrete procedure methods.
+- Converts returned DTOs back into Skir payload arrays.
+
+With `skir-laravel-data-generator`, request hydration uses `makeFromSkirPayload()`, so Laravel Data validation runs before your procedure method is called.
+
+The generators also keep emitting `SkirProcedures.php` and `SkirProcedureProvider.php`. Use that lower-level path if you prefer binding an interface and registering the generated provider:
 
 ```php
+use App\Skir\Admin\AdminProcedures;
 use App\Skir\Admin\SkirProcedureProvider;
+use App\Skir\Admin\SkirProcedures;
 use Illuminate\Support\Facades\Route;
+
+$this->app->bind(SkirProcedures::class, AdminProcedures::class);
 
 Route::skirRpc('/api/skir', [
     SkirProcedureProvider::class,
 ]);
 ```
 
-The generated provider handles the repetitive work:
-
-- Registers every generated `SkirMethods::*()` descriptor with the endpoint.
-- Hydrates incoming payloads into generated request DTOs.
-- Calls your `SkirProcedures` implementation.
-- Converts returned DTOs back into Skir payload arrays.
-
-With `skir-laravel-data-generator`, request hydration uses `makeFromSkirPayload()`, so Laravel Data validation runs before your procedure method is called.
-
 ## Standard PHP DTO example
 
-When using `skir-php-generator`, the generated interface uses standard PHP DTOs:
+When using `skir-php-generator`, the generated abstract class uses standard PHP DTOs:
 
 ```php
 namespace App\Skir\Admin;
 
 use LaravelSkir\Server\RequestContext;
 
-interface SkirProcedures
+abstract class AbstractSkirProcedures
 {
-    public function getUser(GetUserRequest $request, RequestContext $context): User;
+    abstract public function getUser(GetUserRequest $request, RequestContext $context): User;
 }
 ```
 
@@ -138,7 +152,7 @@ namespace App\Skir\Admin;
 
 use LaravelSkir\Server\RequestContext;
 
-final class AdminProcedures implements SkirProcedures
+final class AdminProcedures extends AbstractSkirProcedures
 {
     public function getUser(GetUserRequest $request, RequestContext $context): User
     {
@@ -190,13 +204,25 @@ Responses are returned as raw Skir dense JSON values:
 
 GET requests are also supported by passing `method` and a JSON-encoded `request` query parameter.
 
+## Studio
+
+Studio is disabled by default. Enable it per endpoint:
+
+```php
+Route::skirRpc('/api/skir', [
+    AdminProcedures::class,
+])->studio();
+```
+
+Then open `/api/skir?studio` in a browser. Studio renders the methods registered on that endpoint only, so separate Skir endpoints keep separate procedure lists.
+
 ## Codecs
 
 Dense JSON is the default endpoint codec:
 
 ```php
 Route::skirRpc('/api/skir', [
-    SkirProcedureProvider::class,
+    AdminProcedures::class,
 ]);
 ```
 
@@ -206,11 +232,11 @@ You can choose a codec per endpoint:
 use LaravelSkir\Server\Codecs\SkirCodecs;
 
 Route::skirRpc('/api/skir-readable', [
-    SkirProcedureProvider::class,
+    AdminProcedures::class,
 ], SkirCodecs::standardJson());
 
 Route::skirRpc('/api/skir-base64', [
-    SkirProcedureProvider::class,
+    AdminProcedures::class,
 ], SkirCodecs::base64DenseJson());
 ```
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace LaravelSkir\Server;
 
+use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 use LaravelSkir\Server\Codecs\DenseJsonCodec;
@@ -21,6 +22,11 @@ final class SkirServerServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        LaravelRoute::macro('studio', function (bool $enabled = true) {
+            /** @var LaravelRoute $this */
+            return $this->defaults('skirStudioEnabled', $enabled);
+        });
+
         /** @var Router $router */
         $router = $this->app['router'];
 

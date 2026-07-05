@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace LaravelSkir\Server\Tests\Feature;
 
+use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Route;
 use LaravelSkir\Runtime\DenseJson;
 use LaravelSkir\Runtime\Field;
@@ -78,7 +79,9 @@ final class SkirRpcControllerTest extends TestCase
     #[Test]
     public function it_registers_a_route_macro_for_skir_rpc_endpoints(): void
     {
-        Route::skirRpc('/rpc');
+        $route = Route::skirRpc('/rpc');
+
+        $this->assertInstanceOf(LaravelRoute::class, $route);
 
         app(SkirServer::class)->addMethod(
             new MethodDescriptor('Square', 1001, Type::float32(), Type::float32()),
@@ -92,6 +95,36 @@ final class SkirRpcControllerTest extends TestCase
             ])
             ->assertOk()
             ->assertContent('25');
+    }
+
+    #[Test]
+    public function it_exposes_endpoint_studio_when_enabled_on_the_route(): void
+    {
+        Route::skirRpc('/studio-rpc', [
+            SquareProcedureProvider::class,
+            DoubleProcedureProvider::class,
+        ])->studio();
+
+        $this
+            ->get('/studio-rpc?studio')
+            ->assertOk()
+            ->assertHeader('content-type', 'text/html; charset=UTF-8')
+            ->assertSee('Skir RPC Studio')
+            ->assertSee('Square')
+            ->assertSee('Double')
+            ->assertSee('/studio-rpc');
+    }
+
+    #[Test]
+    public function it_keeps_endpoint_studio_disabled_by_default(): void
+    {
+        Route::skirRpc('/private-studio-rpc', [
+            SquareProcedureProvider::class,
+        ]);
+
+        $this
+            ->get('/private-studio-rpc?studio')
+            ->assertNotFound();
     }
 
     #[Test]
