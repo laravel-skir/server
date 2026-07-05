@@ -8,17 +8,95 @@ Laravel package for exposing SkirRPC methods from a Laravel application.
 composer require laravel-skir/server
 ```
 
-## Usage
+## Generated server procedures
 
-Register an endpoint in your routes file:
+Start with a Skir method definition:
 
-```php
-use Illuminate\Support\Facades\Route;
+```skir
+// skir-src/admin/users.skir
+struct GetUserRequest {
+  user_id: int32;
+}
 
-Route::skirRpc('/api/skir');
+struct User {
+  user_id: int32;
+  name: string;
+}
+
+method GetUser(GetUserRequest): User = 3180856469;
 ```
 
-For generated procedure providers:
+Configure one of the PHP generators in `skir.yml`:
+
+```yaml
+generators:
+  - mod: skir-laravel-data-generator
+    outDir: app/SkirGenerated
+    config:
+      namespace: App\Skir
+```
+
+Then run generation from your Laravel app:
+
+```bash
+php artisan skir:generate-client
+```
+
+For every module that contains methods, the generator writes:
+
+```text
+app/SkirGenerated/Admin/SkirMethods.php
+app/SkirGenerated/Admin/SkirProcedures.php
+app/SkirGenerated/Admin/SkirProcedureProvider.php
+```
+
+Make sure the output directory is covered by Composer autoloading. For example, map `App\\Skir\\` to `app/SkirGenerated/` or choose an output directory that already matches your app's autoload setup.
+
+`SkirProcedures.php` is the interface your application implements. With `skir-laravel-data-generator`, it looks like this:
+
+```php
+namespace App\Skir\Admin;
+
+use LaravelSkir\Server\RequestContext;
+
+interface SkirProcedures
+{
+    public function getUser(GetUserRequestData $request, RequestContext $context): UserData;
+}
+```
+
+Implement it in your app code:
+
+```php
+namespace App\Skir\Admin;
+
+use App\Models\User as UserModel;
+use LaravelSkir\Server\RequestContext;
+
+final class AdminProcedures implements SkirProcedures
+{
+    public function getUser(GetUserRequestData $request, RequestContext $context): UserData
+    {
+        $user = UserModel::query()->findOrFail($request->userId);
+
+        return new UserData(
+            userId: $user->id,
+            name: $user->name,
+        );
+    }
+}
+```
+
+Bind the generated interface to your implementation:
+
+```php
+use App\Skir\Admin\AdminProcedures;
+use App\Skir\Admin\SkirProcedures;
+
+$this->app->bind(SkirProcedures::class, AdminProcedures::class);
+```
+
+Register the generated provider on an endpoint:
 
 ```php
 use App\Skir\Admin\SkirProcedureProvider;
@@ -27,6 +105,61 @@ use Illuminate\Support\Facades\Route;
 Route::skirRpc('/api/skir', [
     SkirProcedureProvider::class,
 ]);
+```
+
+The generated provider handles the repetitive work:
+
+- Registers every generated `SkirMethods::*()` descriptor with the endpoint.
+- Hydrates incoming payloads into generated request DTOs.
+- Calls your `SkirProcedures` implementation.
+- Converts returned DTOs back into Skir payload arrays.
+
+With `skir-laravel-data-generator`, request hydration uses `makeFromSkirPayload()`, so Laravel Data validation runs before your procedure method is called.
+
+## Standard PHP DTO example
+
+When using `skir-php-generator`, the generated interface uses standard PHP DTOs:
+
+```php
+namespace App\Skir\Admin;
+
+use LaravelSkir\Server\RequestContext;
+
+interface SkirProcedures
+{
+    public function getUser(GetUserRequest $request, RequestContext $context): User;
+}
+```
+
+Your implementation returns generated DTO objects:
+
+```php
+namespace App\Skir\Admin;
+
+use LaravelSkir\Server\RequestContext;
+
+final class AdminProcedures implements SkirProcedures
+{
+    public function getUser(GetUserRequest $request, RequestContext $context): User
+    {
+        return new User(
+            userId: $request->userId,
+            name: 'Maxim',
+        );
+    }
+}
+```
+
+## Manual registration
+
+You can still register handlers manually. This is useful for tests, tiny endpoints, or experiments.
+
+Register an endpoint in your routes file:
+
+```php
+use Illuminate\Support\Facades\Route;
+
+Route::skirRpc('/api/skir');
 ```
 
 Register generated Skir method descriptors with handlers:
@@ -41,15 +174,6 @@ app(SkirServer::class)->addMethod(
     new MethodDescriptor('Square', 1001, Type::float32(), Type::float32()),
     fn (float $value, RequestContext $context): float => $value * $value,
 );
-```
-
-Generated providers expect an implementation of the generated `SkirProcedures` interface to be bound in Laravel's container.
-
-```php
-use App\Skir\Admin\SkirProcedures;
-use App\Skir\AdminProcedures;
-
-$this->app->bind(SkirProcedures::class, AdminProcedures::class);
 ```
 
 The endpoint accepts SkirRPC request envelopes:
