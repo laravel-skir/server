@@ -5,7 +5,7 @@ Laravel package for exposing SkirRPC methods from a Laravel application.
 ## Installation
 
 ```bash
-composer require laravel-skir/server
+composer require php-skir/server
 ```
 
 ## Generated server procedures
@@ -59,7 +59,7 @@ Register a Skir endpoint as one service and compose it from controllers:
 ```php
 use App\Skir\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
-use LaravelSkir\Server\Facades\Skir;
+use Skir\Server\Facades\Skir;
 
 Route::skirRpc('/api/skir', [
     Skir::controller(UserController::class),
@@ -75,8 +75,8 @@ use App\Models\User as UserModel;
 use App\Skir\Admin\AdminSkirMethod;
 use App\Skir\Admin\GetUserRequestData;
 use App\Skir\Admin\UserData;
-use LaravelSkir\Server\Attributes\SkirMethod;
-use LaravelSkir\Server\SkirContext;
+use Skir\Server\Attributes\SkirMethod;
+use Skir\Server\SkirContext;
 
 final class UserController
 {
@@ -108,7 +108,7 @@ For one-method controllers, register an invokable controller explicitly:
 use App\Skir\Admin\AdminSkirMethod;
 use App\Skir\Controllers\GetUserController;
 use Illuminate\Support\Facades\Route;
-use LaravelSkir\Server\Facades\Skir;
+use Skir\Server\Facades\Skir;
 
 Route::skirRpc('/api/skir', [
     Skir::method(AdminSkirMethod::GetUser, GetUserController::class),
@@ -125,8 +125,8 @@ namespace App\Skir\Controllers;
 use App\Skir\Admin\AdminSkirMethod;
 use App\Skir\Admin\GetUserRequest;
 use App\Skir\Admin\User;
-use LaravelSkir\Server\Attributes\SkirMethod;
-use LaravelSkir\Server\SkirContext;
+use Skir\Server\Attributes\SkirMethod;
+use Skir\Server\SkirContext;
 
 final class UserController
 {
@@ -175,10 +175,10 @@ Route::skirRpc('/api/skir');
 Register generated Skir method descriptors with handlers:
 
 ```php
-use LaravelSkir\Runtime\MethodDescriptor;
-use LaravelSkir\Runtime\Type;
-use LaravelSkir\Server\SkirContext;
-use LaravelSkir\Server\SkirServer;
+use Skir\Runtime\MethodDescriptor;
+use Skir\Runtime\Type;
+use Skir\Server\SkirContext;
+use Skir\Server\SkirServer;
 
 app(SkirServer::class)->addMethod(
     new MethodDescriptor('Square', 1001, Type::float32(), Type::float32()),
@@ -225,7 +225,7 @@ Route::skirRpc('/api/skir', [
 You can choose a codec per endpoint:
 
 ```php
-use LaravelSkir\Server\Codecs\SkirCodecs;
+use Skir\Server\Codecs\SkirCodecs;
 
 Route::skirRpc('/api/skir-readable', [
     Skir::controller(UserController::class),

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server;
+namespace Skir\Server;
 
 use Closure;
-use LaravelSkir\Runtime\MethodDescriptor;
+use Skir\Runtime\MethodDescriptor;
 
 final readonly class RegisteredProcedure
 {

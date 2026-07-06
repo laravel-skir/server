@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server;
+namespace Skir\Server;
 
-use LaravelSkir\Runtime\MethodDescriptor;
-use LaravelSkir\Server\Exceptions\SkirServerException;
+use Skir\Runtime\MethodDescriptor;
+use Skir\Server\Exceptions\SkirServerException;
 
 final class ProcedureRegistry
 {

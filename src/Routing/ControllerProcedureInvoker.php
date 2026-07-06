@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Routing;
+namespace Skir\Server\Routing;
 
-use LaravelSkir\Server\RequestContext;
-use LaravelSkir\Server\SkirContext;
 use ReflectionMethod;
 use ReflectionNamedType;
+use Skir\Server\RequestContext;
+use Skir\Server\SkirContext;
 
 final readonly class ControllerProcedureInvoker
 {

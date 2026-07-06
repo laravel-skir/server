@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Contracts;
+namespace Skir\Server\Contracts;
 
-use LaravelSkir\Runtime\MethodDescriptor;
+use Skir\Runtime\MethodDescriptor;
 
 interface SkirMethodReference
 {

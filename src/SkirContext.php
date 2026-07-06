@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server;
+namespace Skir\Server;
 
 use Illuminate\Http\Request;
-use LaravelSkir\Runtime\MethodDescriptor;
+use Skir\Runtime\MethodDescriptor;
 
 readonly class SkirContext
 {

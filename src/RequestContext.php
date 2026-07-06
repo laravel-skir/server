@@ -2,6 +2,6 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server;
+namespace Skir\Server;
 
 final readonly class RequestContext extends SkirContext {}

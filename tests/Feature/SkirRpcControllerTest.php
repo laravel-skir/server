@@ -2,28 +2,28 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Tests\Feature;
+namespace Skir\Server\Tests\Feature;
 
 use CBOR\Decoder;
 use CBOR\Encoder;
 use CBOR\StringStream;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Route;
-use LaravelSkir\Runtime\DenseJson;
-use LaravelSkir\Runtime\Field;
-use LaravelSkir\Runtime\MethodDescriptor;
-use LaravelSkir\Runtime\Type;
-use LaravelSkir\Server\Attributes\SkirMethod;
-use LaravelSkir\Server\Codecs\SkirCodecs;
-use LaravelSkir\Server\Contracts\SkirMethodReference;
-use LaravelSkir\Server\Exceptions\SkirServerException;
-use LaravelSkir\Server\Facades\Skir;
-use LaravelSkir\Server\ProcedureProvider;
-use LaravelSkir\Server\RequestContext;
-use LaravelSkir\Server\SkirContext;
-use LaravelSkir\Server\SkirServer;
-use LaravelSkir\Server\Tests\TestCase;
 use PHPUnit\Framework\Attributes\Test;
+use Skir\Runtime\DenseJson;
+use Skir\Runtime\Field;
+use Skir\Runtime\MethodDescriptor;
+use Skir\Runtime\Type;
+use Skir\Server\Attributes\SkirMethod;
+use Skir\Server\Codecs\SkirCodecs;
+use Skir\Server\Contracts\SkirMethodReference;
+use Skir\Server\Exceptions\SkirServerException;
+use Skir\Server\Facades\Skir;
+use Skir\Server\ProcedureProvider;
+use Skir\Server\RequestContext;
+use Skir\Server\SkirContext;
+use Skir\Server\SkirServer;
+use Skir\Server\Tests\TestCase;
 
 final class SkirRpcControllerTest extends TestCase
 {

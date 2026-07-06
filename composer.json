@@ -1,5 +1,5 @@
 {
-    "name": "laravel-skir/server",
+    "name": "php-skir/server",
     "description": "Laravel SkirRPC server package.",
     "type": "library",
     "license": "MIT",
@@ -10,10 +10,10 @@
         "serialization",
         "skir"
     ],
-    "homepage": "https://github.com/laravel-skir/server",
+    "homepage": "https://github.com/php-skir/server",
     "support": {
-        "issues": "https://github.com/laravel-skir/server/issues",
-        "source": "https://github.com/laravel-skir/server"
+        "issues": "https://github.com/php-skir/server/issues",
+        "source": "https://github.com/php-skir/server"
     },
     "authors": [
         {
@@ -27,7 +27,7 @@
         "illuminate/http": "^13.0",
         "illuminate/routing": "^13.0",
         "illuminate/support": "^13.0",
-        "laravel-skir/runtime": "^0.1@dev"
+        "php-skir/runtime": "^0.1@dev"
     },
     "require-dev": {
         "laravel/pint": "^1.29",
@@ -37,12 +37,12 @@
     },
     "autoload": {
         "psr-4": {
-            "LaravelSkir\\Server\\": "src/"
+            "Skir\\Server\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "LaravelSkir\\Server\\Tests\\": "tests/"
+            "Skir\\Server\\Tests\\": "tests/"
         }
     },
     "repositories": [
@@ -57,7 +57,7 @@
     "extra": {
         "laravel": {
             "providers": [
-                "LaravelSkir\\Server\\SkirServerServiceProvider"
+                "Skir\\Server\\SkirServerServiceProvider"
             ]
         },
         "branch-alias": {

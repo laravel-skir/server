@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server;
+namespace Skir\Server;
 
-use LaravelSkir\Runtime\MethodDescriptor;
-use LaravelSkir\Server\Codecs\DenseJsonCodec;
-use LaravelSkir\Server\Codecs\SkirCodec;
+use Skir\Runtime\MethodDescriptor;
+use Skir\Server\Codecs\DenseJsonCodec;
+use Skir\Server\Codecs\SkirCodec;
 
 final readonly class SkirServer
 {

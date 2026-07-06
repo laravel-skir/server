@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Studio;
+namespace Skir\Server\Studio;
 
-use LaravelSkir\Runtime\Field;
-use LaravelSkir\Runtime\MethodDescriptor;
-use LaravelSkir\Runtime\Type;
-use LaravelSkir\Runtime\Variant;
-use LaravelSkir\Server\RegisteredProcedure;
-use LaravelSkir\Server\SkirServer;
+use Skir\Runtime\Field;
+use Skir\Runtime\MethodDescriptor;
+use Skir\Runtime\Type;
+use Skir\Runtime\Variant;
+use Skir\Server\RegisteredProcedure;
+use Skir\Server\SkirServer;
 
 final class StudioRenderer
 {

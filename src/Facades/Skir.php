@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Facades;
+namespace Skir\Server\Facades;
 
-use LaravelSkir\Server\Contracts\SkirMethodReference;
-use LaravelSkir\Server\Routing\SkirControllerRouteDefinition;
-use LaravelSkir\Server\Routing\SkirMethodRouteDefinition;
+use Skir\Server\Contracts\SkirMethodReference;
+use Skir\Server\Routing\SkirControllerRouteDefinition;
+use Skir\Server\Routing\SkirMethodRouteDefinition;
 
 final class Skir
 {

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server;
+namespace Skir\Server;
 
 interface ProcedureProvider
 {

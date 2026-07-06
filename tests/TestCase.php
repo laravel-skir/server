@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Tests;
+namespace Skir\Server\Tests;
 
 use Illuminate\Contracts\Routing\Registrar;
-use LaravelSkir\Server\Http\Controllers\SkirRpcController;
-use LaravelSkir\Server\SkirServerServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
+use Skir\Server\Http\Controllers\SkirRpcController;
+use Skir\Server\SkirServerServiceProvider;
 
 abstract class TestCase extends Orchestra
 {

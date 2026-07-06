@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Routing;
+namespace Skir\Server\Routing;
 
-use LaravelSkir\Server\Attributes\SkirMethod;
-use LaravelSkir\Server\SkirServer;
 use ReflectionClass;
 use ReflectionMethod;
+use Skir\Server\Attributes\SkirMethod;
+use Skir\Server\SkirServer;
 
 final readonly class SkirControllerRouteDefinition implements SkirRouteDefinition
 {

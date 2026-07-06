@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Exceptions;
+namespace Skir\Server\Exceptions;
 
 use Illuminate\Http\JsonResponse;
 use RuntimeException;

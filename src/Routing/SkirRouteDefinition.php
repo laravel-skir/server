@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Routing;
+namespace Skir\Server\Routing;
 
-use LaravelSkir\Server\SkirServer;
+use Skir\Server\SkirServer;
 
 interface SkirRouteDefinition
 {

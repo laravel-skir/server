@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Codecs;
+namespace Skir\Server\Codecs;
 
-use LaravelSkir\Runtime\MethodDescriptor;
+use Skir\Runtime\MethodDescriptor;
 
 final class StandardJsonCodec implements SkirCodec
 {

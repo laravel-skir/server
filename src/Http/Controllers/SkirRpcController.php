@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Http\Controllers;
+namespace Skir\Server\Http\Controllers;
 
 use Illuminate\Http\Request;
 use JsonException;
-use LaravelSkir\Runtime\Exceptions\SkirRuntimeException;
-use LaravelSkir\Server\Codecs\SkirCodec;
-use LaravelSkir\Server\Codecs\SkirHttpCodec;
-use LaravelSkir\Server\Exceptions\SkirServerException;
-use LaravelSkir\Server\RequestContext;
-use LaravelSkir\Server\SkirServer;
-use LaravelSkir\Server\Studio\StudioRenderer;
+use Skir\Runtime\Exceptions\SkirRuntimeException;
+use Skir\Server\Codecs\SkirCodec;
+use Skir\Server\Codecs\SkirHttpCodec;
+use Skir\Server\Exceptions\SkirServerException;
+use Skir\Server\RequestContext;
+use Skir\Server\SkirServer;
+use Skir\Server\Studio\StudioRenderer;
 use Symfony\Component\HttpFoundation\Response;
 
 final readonly class SkirRpcController

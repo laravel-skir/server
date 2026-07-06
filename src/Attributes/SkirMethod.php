@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Attributes;
+namespace Skir\Server\Attributes;
 
 use Attribute;
-use LaravelSkir\Server\Contracts\SkirMethodReference;
+use Skir\Server\Contracts\SkirMethodReference;
 
 #[Attribute(Attribute::TARGET_METHOD)]
 final readonly class SkirMethod

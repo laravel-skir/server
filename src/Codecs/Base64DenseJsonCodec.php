@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server\Codecs;
+namespace Skir\Server\Codecs;
 
 use JsonException;
-use LaravelSkir\Runtime\DenseJson;
-use LaravelSkir\Runtime\Exceptions\SkirRuntimeException;
-use LaravelSkir\Runtime\MethodDescriptor;
+use Skir\Runtime\DenseJson;
+use Skir\Runtime\Exceptions\SkirRuntimeException;
+use Skir\Runtime\MethodDescriptor;
 
 final class Base64DenseJsonCodec implements SkirCodec
 {

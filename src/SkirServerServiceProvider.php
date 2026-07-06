@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace LaravelSkir\Server;
+namespace Skir\Server;
 
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
-use LaravelSkir\Server\Codecs\DenseJsonCodec;
-use LaravelSkir\Server\Codecs\SkirCodec;
-use LaravelSkir\Server\Http\Controllers\SkirRpcController;
-use LaravelSkir\Server\Routing\SkirRouteDefinition;
+use Skir\Server\Codecs\DenseJsonCodec;
+use Skir\Server\Codecs\SkirCodec;
+use Skir\Server\Http\Controllers\SkirRpcController;
+use Skir\Server\Routing\SkirRouteDefinition;
 
 final class SkirServerServiceProvider extends ServiceProvider
 {
