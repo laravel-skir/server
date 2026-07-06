@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace LaravelSkir\Server\Tests\Feature;
 
+use CBOR\Decoder;
+use CBOR\Encoder;
+use CBOR\StringStream;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Route;
 use LaravelSkir\Runtime\DenseJson;
@@ -316,6 +319,48 @@ final class SkirRpcControllerTest extends TestCase
             ])
             ->assertOk()
             ->assertContent(json_encode(base64_encode(DenseJson::toJson(Type::float32(), 25.0)), JSON_THROW_ON_ERROR));
+    }
+
+    #[Test]
+    public function it_can_use_cbor_payloads_for_an_endpoint(): void
+    {
+        Route::skirRpc('/cbor-rpc', [
+            RenameUserProcedureProvider::class,
+        ], SkirCodecs::cbor());
+
+        $userType = Type::struct([
+            Field::value('id', 0, Type::int32()),
+            Field::value('name', 1, Type::string()),
+        ]);
+
+        $response = $this->call(
+            'POST',
+            '/cbor-rpc',
+            server: [
+                'CONTENT_TYPE' => 'application/cbor',
+                'HTTP_ACCEPT' => 'application/cbor',
+            ],
+            content: (new Encoder)->encode([
+                'method' => 'RenameUser',
+                'request' => DenseJson::encode($userType, [
+                    'id' => 42,
+                    'name' => 'Ruben',
+                ]),
+            ]),
+        );
+
+        $response
+            ->assertOk()
+            ->assertHeader('content-type', 'application/cbor');
+
+        $decodedResponse = Decoder::create()
+            ->decode(StringStream::create($response->getContent()))
+            ->normalize();
+
+        $this->assertSame([
+            'id' => 42,
+            'name' => 'Ruben updated',
+        ], DenseJson::decode($userType, $decodedResponse));
     }
 
     #[Test]

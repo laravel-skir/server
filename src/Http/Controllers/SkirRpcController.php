@@ -7,6 +7,8 @@ namespace LaravelSkir\Server\Http\Controllers;
 use Illuminate\Http\Request;
 use JsonException;
 use LaravelSkir\Runtime\Exceptions\SkirRuntimeException;
+use LaravelSkir\Server\Codecs\SkirCodec;
+use LaravelSkir\Server\Codecs\SkirHttpCodec;
 use LaravelSkir\Server\Exceptions\SkirServerException;
 use LaravelSkir\Server\RequestContext;
 use LaravelSkir\Server\SkirServer;
@@ -36,16 +38,20 @@ final readonly class SkirRpcController
                 )->header('content-type', 'text/html; charset=UTF-8');
             }
 
-            $payload = $this->payloadFromRequest($request);
+            $codec = $server->codec();
+            $payload = $this->payloadFromRequest($request, $codec);
             $method = $this->methodFromPayload($payload);
             $procedure = $server->procedure($method);
-            $decodedRequest = $server->codec()->decodeRequest($procedure->descriptor, $payload['request'] ?? 0);
+            $decodedRequest = $codec->decodeRequest($procedure->descriptor, $payload['request'] ?? 0);
             $result = $procedure->invoke($decodedRequest, new RequestContext($request, $procedure->descriptor));
+            $encodedResponse = $codec->encodeResponse($procedure->descriptor, $result);
 
-            return response()->json(
-                $server->codec()->encodeResponse($procedure->descriptor, $result),
-                Response::HTTP_OK,
-            );
+            if ($codec instanceof SkirHttpCodec) {
+                return response($encodedResponse, Response::HTTP_OK)
+                    ->header('content-type', $codec->contentType());
+            }
+
+            return response()->json($encodedResponse, Response::HTTP_OK);
         } catch (SkirServerException $exception) {
             return $exception->toResponse();
         } catch (SkirRuntimeException $exception) {
@@ -80,10 +86,14 @@ final readonly class SkirRpcController
      *     request?: mixed
      * }
      */
-    private function payloadFromRequest(Request $request): array
+    private function payloadFromRequest(Request $request, SkirCodec $codec): array
     {
         if ($request->isMethod('GET')) {
             return $this->payloadFromQueryString($request);
+        }
+
+        if ($codec instanceof SkirHttpCodec) {
+            return $codec->decodePayload($request->getContent());
         }
 
         $payload = $request->json()->all();

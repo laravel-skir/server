@@ -234,10 +234,15 @@ Route::skirRpc('/api/skir-readable', [
 Route::skirRpc('/api/skir-base64', [
     Skir::controller(UserController::class),
 ], SkirCodecs::base64DenseJson());
+
+Route::skirRpc('/api/skir-cbor', [
+    Skir::controller(UserController::class),
+], SkirCodecs::cbor());
 ```
 
 - `denseJson()` decodes and encodes Skir dense JSON values. This is the default for production APIs.
 - `standardJson()` passes decoded JSON values through unchanged. Use it when you want readable JSON at the HTTP boundary and your procedures/generated providers handle that shape.
 - `base64DenseJson()` accepts and returns base64-encoded dense JSON strings inside the JSON envelope.
+- `cbor()` accepts an `application/cbor` request body with `method` and dense `request` values, and returns an `application/cbor` response body.
 
-True Skir binary transport belongs in the runtime package first; this package currently exposes the text-safe base64 dense JSON mode.
+CBOR support is optional. Install `spomky-labs/cbor-php` in the consuming app before using `SkirCodecs::cbor()`.

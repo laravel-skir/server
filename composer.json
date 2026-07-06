@@ -32,7 +32,8 @@
     "require-dev": {
         "laravel/pint": "^1.29",
         "orchestra/testbench": "^11.0",
-        "phpunit/phpunit": "^12.5"
+        "phpunit/phpunit": "^12.5",
+        "spomky-labs/cbor-php": "^3.2"
     },
     "autoload": {
         "psr-4": {
@@ -66,6 +67,9 @@
     "scripts": {
         "format": "pint",
         "test": "phpunit"
+    },
+    "suggest": {
+        "spomky-labs/cbor-php": "Required when using SkirCodecs::cbor() for application/cbor endpoints."
     },
     "config": {
         "sort-packages": true

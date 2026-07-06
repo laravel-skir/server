@@ -32,6 +32,15 @@ final class SkirServerException extends RuntimeException
         return new self("Skir method [{$method}] is already registered on this endpoint.", 'skir_duplicate_method', 422);
     }
 
+    public static function missingCborDependency(): self
+    {
+        return new self(
+            'Skir CBOR support requires the [spomky-labs/cbor-php] Composer package.',
+            'skir_missing_cbor_dependency',
+            500,
+        );
+    }
+
     public function toResponse(): JsonResponse
     {
         return response()->json([
