@@ -18,7 +18,7 @@ final readonly class RegisteredProcedure
         $this->handler = Closure::fromCallable($handler);
     }
 
-    public function invoke(mixed $request, RequestContext $context): mixed
+    public function invoke(mixed $request, SkirContext $context): mixed
     {
         return ($this->handler)($request, $context);
     }

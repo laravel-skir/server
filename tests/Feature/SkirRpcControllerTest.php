@@ -13,6 +13,7 @@ use LaravelSkir\Runtime\Type;
 use LaravelSkir\Server\Codecs\SkirCodecs;
 use LaravelSkir\Server\ProcedureProvider;
 use LaravelSkir\Server\RequestContext;
+use LaravelSkir\Server\SkirContext;
 use LaravelSkir\Server\SkirServer;
 use LaravelSkir\Server\Tests\TestCase;
 use PHPUnit\Framework\Attributes\Test;
@@ -212,6 +213,34 @@ final class SkirRpcControllerTest extends TestCase
             ])
             ->assertOk()
             ->assertContent(json_encode(base64_encode(DenseJson::toJson(Type::float32(), 25.0)), JSON_THROW_ON_ERROR));
+    }
+
+    #[Test]
+    public function it_injects_the_primary_skir_context(): void
+    {
+        app(SkirServer::class)->addMethod(
+            new MethodDescriptor('ContextMethod', 2001, Type::float32(), Type::float32()),
+            fn (float $value, SkirContext $context): float => $context->method->name === 'ContextMethod' ? $value : 0.0,
+        );
+
+        $this
+            ->postJson('/skir', [
+                'method' => 'ContextMethod',
+                'request' => 5.0,
+            ])
+            ->assertOk()
+            ->assertContent('5');
+    }
+
+    #[Test]
+    public function it_keeps_request_context_as_a_compatibility_type(): void
+    {
+        $context = new RequestContext(
+            request: request(),
+            method: new MethodDescriptor('Compat', 2002, Type::float32(), Type::float32()),
+        );
+
+        $this->assertInstanceOf(SkirContext::class, $context);
     }
 
     #[Test]
