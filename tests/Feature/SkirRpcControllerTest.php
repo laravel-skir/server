@@ -13,6 +13,7 @@ use LaravelSkir\Runtime\Type;
 use LaravelSkir\Server\Attributes\SkirMethod;
 use LaravelSkir\Server\Codecs\SkirCodecs;
 use LaravelSkir\Server\Contracts\SkirMethodReference;
+use LaravelSkir\Server\Exceptions\SkirServerException;
 use LaravelSkir\Server\Facades\Skir;
 use LaravelSkir\Server\ProcedureProvider;
 use LaravelSkir\Server\RequestContext;
@@ -192,6 +193,58 @@ final class SkirRpcControllerTest extends TestCase
                 'request' => 5.0,
             ])
             ->assertNotFound();
+    }
+
+    #[Test]
+    public function it_allows_multiple_controllers_on_one_endpoint(): void
+    {
+        Route::skirRpc('/multi-controller-rpc', [
+            Skir::method(TestSkirMethod::Square, SquareController::class),
+            Skir::controller(MultiMethodController::class),
+        ]);
+
+        $this
+            ->postJson('/multi-controller-rpc', [
+                'method' => 'Square',
+                'request' => 5.0,
+            ])
+            ->assertOk()
+            ->assertContent('25');
+
+        $this
+            ->postJson('/multi-controller-rpc', [
+                'method' => 'Double',
+                'request' => 5.0,
+            ])
+            ->assertOk()
+            ->assertContent('10');
+    }
+
+    #[Test]
+    public function it_rejects_duplicate_methods_on_one_endpoint(): void
+    {
+        $this->expectException(SkirServerException::class);
+        $this->expectExceptionMessage('Skir method [Square] is already registered on this endpoint.');
+
+        Route::skirRpc('/duplicate-rpc', [
+            Skir::method(TestSkirMethod::Square, SquareController::class),
+            Skir::method(TestSkirMethod::Square, SquareController::class),
+        ]);
+    }
+
+    #[Test]
+    public function studio_lists_controller_registered_methods(): void
+    {
+        Route::skirRpc('/controller-studio-rpc', [
+            Skir::controller(MultiMethodController::class),
+        ])->studio();
+
+        $this
+            ->get('/controller-studio-rpc?studio')
+            ->assertOk()
+            ->assertSee('Double')
+            ->assertSee('RenameUser')
+            ->assertDontSee('ignored');
     }
 
     #[Test]
