@@ -14,6 +14,10 @@ final class ProcedureRegistry
 
     public function add(MethodDescriptor $descriptor, callable $handler): void
     {
+        if (array_key_exists($descriptor->name, $this->procedures)) {
+            throw SkirServerException::duplicateMethod($descriptor->name);
+        }
+
         $this->procedures[$descriptor->name] = new RegisteredProcedure($descriptor, $handler);
     }
 

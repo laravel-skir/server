@@ -27,6 +27,11 @@ final class SkirServerException extends RuntimeException
         return new self("Skir method [{$method}] is not registered.", 'skir_method_not_found', 404);
     }
 
+    public static function duplicateMethod(string $method): self
+    {
+        return new self("Skir method [{$method}] is already registered on this endpoint.", 'skir_duplicate_method', 422);
+    }
+
     public function toResponse(): JsonResponse
     {
         return response()->json([

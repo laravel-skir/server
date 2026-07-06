@@ -10,7 +10,10 @@ use LaravelSkir\Runtime\DenseJson;
 use LaravelSkir\Runtime\Field;
 use LaravelSkir\Runtime\MethodDescriptor;
 use LaravelSkir\Runtime\Type;
+use LaravelSkir\Server\Attributes\SkirMethod;
 use LaravelSkir\Server\Codecs\SkirCodecs;
+use LaravelSkir\Server\Contracts\SkirMethodReference;
+use LaravelSkir\Server\Facades\Skir;
 use LaravelSkir\Server\ProcedureProvider;
 use LaravelSkir\Server\RequestContext;
 use LaravelSkir\Server\SkirContext;
@@ -142,6 +145,53 @@ final class SkirRpcControllerTest extends TestCase
             ])
             ->assertOk()
             ->assertContent('25');
+    }
+
+    #[Test]
+    public function it_dispatches_an_explicit_invokable_controller_method(): void
+    {
+        Route::skirRpc('/controller-rpc', [
+            Skir::method(TestSkirMethod::Square, SquareController::class),
+        ]);
+
+        $this
+            ->postJson('/controller-rpc', [
+                'method' => 'Square',
+                'request' => 5.0,
+            ])
+            ->assertOk()
+            ->assertContent('25');
+    }
+
+    #[Test]
+    public function it_registers_attributed_public_controller_methods(): void
+    {
+        Route::skirRpc('/attribute-rpc', [
+            Skir::controller(MultiMethodController::class),
+        ]);
+
+        $this
+            ->postJson('/attribute-rpc', [
+                'method' => 'Double',
+                'request' => 5.0,
+            ])
+            ->assertOk()
+            ->assertContent('10');
+
+        $this
+            ->postJson('/attribute-rpc', [
+                'method' => 'RenameUser',
+                'request' => [42, 'Maxim'],
+            ])
+            ->assertOk()
+            ->assertExactJson([42, 'Maxim updated']);
+
+        $this
+            ->postJson('/attribute-rpc', [
+                'method' => 'Ignored',
+                'request' => 5.0,
+            ])
+            ->assertNotFound();
     }
 
     #[Test]
@@ -316,5 +366,88 @@ final class RenameUserProcedureProvider implements ProcedureProvider
                 'name' => "{$user['name']} updated",
             ],
         );
+    }
+}
+
+enum TestSkirMethod implements SkirMethodReference
+{
+    case Square;
+    case Double;
+    case RenameUser;
+
+    public function descriptor(): MethodDescriptor
+    {
+        return match ($this) {
+            self::Square => new MethodDescriptor('Square', 1001, Type::float32(), Type::float32()),
+            self::Double => new MethodDescriptor('Double', 1002, Type::float32(), Type::float32()),
+            self::RenameUser => new MethodDescriptor('RenameUser', 1003, Type::struct([
+                Field::value('id', 0, Type::int32()),
+                Field::value('name', 1, Type::string()),
+            ]), Type::struct([
+                Field::value('id', 0, Type::int32()),
+                Field::value('name', 1, Type::string()),
+            ])),
+        };
+    }
+}
+
+final class SquareController
+{
+    public function __invoke(float $value, SkirContext $context): float
+    {
+        return $context->method->name === 'Square' ? $value * $value : 0.0;
+    }
+}
+
+final class MultiMethodController
+{
+    #[SkirMethod(TestSkirMethod::Double)]
+    public function anyName(float $value): float
+    {
+        return $value * 2;
+    }
+
+    #[SkirMethod(TestSkirMethod::RenameUser)]
+    public function rename(RenameUserPayload $payload): RenameUserPayload
+    {
+        return new RenameUserPayload($payload->id, "{$payload->name} updated");
+    }
+
+    public function ignored(float $value): float
+    {
+        return $value * 100;
+    }
+}
+
+final readonly class RenameUserPayload
+{
+    public function __construct(
+        public int $id,
+        public string $name,
+    ) {}
+
+    /**
+     * @param  array{
+     *     id: int,
+     *     name: string
+     * }  $payload
+     */
+    public static function fromArray(array $payload): self
+    {
+        return new self($payload['id'], $payload['name']);
+    }
+
+    /**
+     * @return array{
+     *     id: int,
+     *     name: string
+     * }
+     */
+    public function toArray(): array
+    {
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+        ];
     }
 }

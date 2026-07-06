@@ -10,6 +10,7 @@ use Illuminate\Support\ServiceProvider;
 use LaravelSkir\Server\Codecs\DenseJsonCodec;
 use LaravelSkir\Server\Codecs\SkirCodec;
 use LaravelSkir\Server\Http\Controllers\SkirRpcController;
+use LaravelSkir\Server\Routing\SkirRouteDefinition;
 
 final class SkirServerServiceProvider extends ServiceProvider
 {
@@ -44,6 +45,12 @@ final class SkirServerServiceProvider extends ServiceProvider
 
             foreach ($providers as $provider) {
                 $resolvedProvider = is_string($provider) ? app($provider) : $provider;
+
+                if ($resolvedProvider instanceof SkirRouteDefinition) {
+                    $resolvedProvider->register($server);
+
+                    continue;
+                }
 
                 if (! $resolvedProvider instanceof ProcedureProvider) {
                     continue;
