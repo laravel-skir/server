@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace LaravelSkir\Server\Codecs;
 
-use CBOR\Encoder;
+use LaravelSkir\Runtime\Cbor;
 use LaravelSkir\Server\Exceptions\SkirServerException;
 
 final class SkirCodecs
 {
     public static function cbor(): SkirCodec
     {
-        if (! class_exists(Encoder::class)) {
+        if (! Cbor::available()) {
             throw SkirServerException::missingCborDependency();
         }
 
