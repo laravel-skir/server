@@ -8,148 +8,220 @@ Laravel package for exposing SkirRPC methods from a Laravel application.
 composer require php-skir/server
 ```
 
-## Generated server procedures
+## Generate definitions and a manifest
 
-Start with a Skir method definition:
-
-```skir
-// skir-src/admin/users.skir
-struct GetUserRequest {
-  user_id: int32;
-}
-
-struct User {
-  user_id: int32;
-  name: string;
-}
-
-method GetUser(GetUserRequest): User = 3180856469;
-```
-
-Configure one of the PHP generators in `skir.yml`:
+This package hosts and implements a SkirRPC server. Start by generating the PHP definitions and server scaffolding manifest with either [`skir-php-generator`](https://github.com/php-skir/skir-php-generator) or [`skir-laravel-data-generator`](https://github.com/php-skir/skir-laravel-data-generator):
 
 ```yaml
+# skir.yml
 generators:
   - mod: skir-laravel-data-generator
-    outDir: app/SkirGenerated
+    outDir: app/Skir/skirout
     config:
-      namespace: App\Skir
+      namespace: Skir
 ```
-
-Then run the configured generators from the project root:
 
 ```bash
 npx skir gen
+composer dump-autoload
 ```
 
-### Optional Artisan wrapper
-
-The [`php-skir/client`](https://github.com/php-skir/client) package provides an optional Artisan wrapper for running the configured Skir generators:
-
-```bash
-php artisan skir:generate-client
-```
-
-The client package is not required to host a SkirRPC server. It will usually be installed in a separate application that consumes the server, so server projects can run `npx skir gen` directly.
-
-For every module that contains methods, the generator writes:
+Both generators write `skir-server-manifest.json` at the root of their configured `outDir`. The manifest contains versioned module and method metadata, generated method-enum classes, PHP method names, PHP request and response types, and fully qualified record classes. The default server configuration reads:
 
 ```text
-app/SkirGenerated/Admin/SkirMethods.php
-app/SkirGenerated/Admin/AdminSkirMethod.php
-app/SkirGenerated/Admin/AbstractSkirProcedures.php
-app/SkirGenerated/Admin/SkirProcedures.php
-app/SkirGenerated/Admin/SkirProcedureProvider.php
+app/Skir/skirout/skir-server-manifest.json
 ```
 
-Make sure the output directory is covered by Composer autoloading. For example, map `App\\Skir\\` to `app/SkirGenerated/` or choose an output directory that already matches your app's autoload setup.
+Make the generated namespace available through Composer. For the example above, map `Skir\\` to `app/Skir/skirout/`, or use the generator's `configure-composer` command documented in its repository.
 
-Register a Skir endpoint as one service and compose it from controllers:
+## Scaffold controllers
+
+Scaffold every method, complete modules, or exact method IDs from the generated manifests:
+
+```bash
+php artisan skir:make --all
+php artisan skir:make --module=Admin.Users
+php artisan skir:make --method=Admin.Users.GetUser
+```
+
+Generation is deliberately not run by default. Add `--generate` when the command should first run the configured generator command and reload the resulting manifests:
+
+```bash
+php artisan skir:make --generate --module=Admin.Users
+```
+
+Choose one of three controller layouts:
+
+```bash
+# One controller per selected module; this is the default.
+php artisan skir:make --module=Admin.Users --style=module
+
+# One invokable controller per selected method.
+php artisan skir:make --method=Admin.Users.GetUser --style=invokable
+
+# One controller for the complete selection.
+php artisan skir:make --all --style=single
+php artisan skir:make --all --controller='App\Skir\RpcController'
+```
+
+`--controller` implies the `single` style. To use a mixture of layouts, run the command once for each selection; layout is an implementation choice and is not stored in the generated schema.
+
+Object request methods can use generated Laravel Form Requests:
+
+```bash
+php artisan skir:make --module=Admin.Users --with-requests
+php artisan skir:make --module=Admin.Users --without-requests
+```
+
+Without either flag, the configured `form_requests` default is used. Scalar and union request parameters remain directly typed because Form Requests apply only to object request methods.
+
+In interactive terminals, the command prompts for the selection, layout, single controller class when applicable, and Form Request preference. It shows the selected methods and controller destinations before asking for confirmation. In non-interactive mode, pass `--all`, `--module`, or `--method` explicitly.
+
+### Configuration
+
+Publish the configuration when the defaults do not fit the application:
+
+```bash
+php artisan vendor:publish --tag=skir-server-config
+```
 
 ```php
-use App\Skir\Controllers\UserController;
+<?php
+
+return [
+    'manifests' => [
+        base_path('app/Skir/skirout/skir-server-manifest.json'),
+    ],
+
+    // An argv list, not a shell command string.
+    'generator_command' => ['npx', 'skir', 'gen'],
+
+    'scaffolding' => [
+        'controller_style' => 'module',
+        'controller_namespace' => 'App\\Skir',
+        'single_controller' => 'App\\Skir\\SkirController',
+        'request_namespace' => 'App\\Http\\Requests\\Skir',
+        'form_requests' => true,
+    ],
+];
+```
+
+`generator_command` is passed as an argument array, runs from the Laravel project root, streams its output, and has no process timeout. A failed generator stops scaffolding before manifest loading or application file writes.
+
+### Additive regeneration
+
+Running `skir:make` again adds missing attributed methods to existing module and single controllers. It does not replace existing method definitions or delete methods that no longer appear in the selected manifest; stale attributed methods are reported as warnings. An identical rerun is a no-op.
+
+The command validates manifests, PHP syntax, class identities, imports, methods, and every planned destination before publishing changes. A conflicting PHP method, invalid controller, destination collision, or publication failure aborts the scaffolding transaction instead of leaving a partial set of controllers and requests.
+
+### Controller layouts and route registration
+
+Module and single controllers contain attributed methods and are registered as controller groups:
+
+```php
+use App\Skir\Admin\Users\UsersController;
 use Illuminate\Support\Facades\Route;
 use Skir\Server\Facades\Skir;
 
 Route::skirRpc('/api/skir', [
-    Skir::controller(UserController::class),
-])->studio();
-```
-
-Controller methods are registered only when they have a `SkirMethod` attribute. The PHP method name is not used for Skir method resolution; the generated enum case is the source of truth.
-
-```php
-namespace App\Skir\Controllers;
-
-use App\Models\User as UserModel;
-use App\Skir\Admin\AdminSkirMethod;
-use App\Skir\Admin\GetUserRequestData;
-use App\Skir\Admin\UserData;
-use Skir\Server\Attributes\SkirMethod;
-use Skir\Server\SkirContext;
-
-final class UserController
-{
-    #[SkirMethod(AdminSkirMethod::GetUser)]
-    public function get(GetUserRequestData $request, SkirContext $context): UserData
-    {
-        $user = UserModel::query()->findOrFail($request->userId);
-
-        return new UserData(
-            userId: $user->id,
-            name: $user->name,
-        );
-    }
-}
-```
-
-The controller dispatcher handles the repetitive work:
-
-- Registers every generated `SkirMethods::*()` descriptor with the endpoint.
-- Hydrates incoming payloads into generated request DTOs.
-- Calls your attributed controller methods.
-- Converts returned DTOs back into Skir payload arrays.
-
-With `skir-laravel-data-generator`, request hydration uses `makeFromSkirPayload()`, so Laravel Data validation runs before your procedure method is called.
-
-For one-method controllers, register an invokable controller explicitly:
-
-```php
-use App\Skir\Admin\AdminSkirMethod;
-use App\Skir\Controllers\GetUserController;
-use Illuminate\Support\Facades\Route;
-use Skir\Server\Facades\Skir;
-
-Route::skirRpc('/api/skir', [
-    Skir::method(AdminSkirMethod::GetUser, GetUserController::class),
+    Skir::controller(UsersController::class),
 ]);
 ```
 
-## Standard PHP DTO example
-
-When using `skir-php-generator`, controller methods use standard PHP DTOs:
-
 ```php
-namespace App\Skir\Controllers;
+namespace App\Skir\Admin\Users;
 
-use App\Skir\Admin\AdminSkirMethod;
-use App\Skir\Admin\GetUserRequest;
-use App\Skir\Admin\User;
+use LogicException;
+use Skir\Admin\Users\AdminUsersSkirMethod;
+use Skir\Admin\Users\GetUserRequestData;
+use Skir\Admin\Users\UserData;
 use Skir\Server\Attributes\SkirMethod;
 use Skir\Server\SkirContext;
 
-final class UserController
+final class UsersController
 {
-    #[SkirMethod(AdminSkirMethod::GetUser)]
-    public function get(GetUserRequest $request, SkirContext $context): User
+    #[SkirMethod(AdminUsersSkirMethod::GetUser)]
+    public function getUser(GetUserRequestData $request, SkirContext $context): UserData
     {
-        return new User(
-            userId: $request->userId,
-            name: 'Maxim',
-        );
+        throw new LogicException('Skir method [Admin.Users.GetUser] is not implemented.');
     }
 }
 ```
+
+The `single` style has the same attributed method shape, but places all selected methods in one configured controller. Invokable controllers contain one `__invoke()` method and are registered for an exact generated enum case:
+
+```php
+use App\Skir\Admin\Users\GetUserController;
+use Illuminate\Support\Facades\Route;
+use Skir\Admin\Users\AdminUsersSkirMethod;
+use Skir\Server\Facades\Skir;
+
+Route::skirRpc('/api/skir', [
+    Skir::method(AdminUsersSkirMethod::GetUser, GetUserController::class),
+]);
+```
+
+After scaffolding, the command prints fully qualified route registration hints. Internally these are structured registrations containing the controller class and, for invokable controllers, the method enum class and case; callers integrating the scaffolder directly do not need to parse display strings.
+
+## Validation and request objects
+
+Directly type-hinting a generated standard PHP DTO or Laravel Data object remains supported. The dispatcher hydrates the decoded Skir payload into that object before calling the controller:
+
+```php
+public function getUser(GetUserRequestData $request, SkirContext $context): UserData
+```
+
+For semantic input validation, a Form Request keeps validation and authorization separate from controller business logic. This follows the same Laravel pattern supported by Sajya, which was an inspiration for the package's server ergonomics.
+
+Generate a Form Request for one exact object-request method:
+
+```bash
+php artisan skir:make-request Admin.Users.GetUser
+php artisan skir:make-request Admin.Users.GetUser --name=ShowUserRequest
+```
+
+Without a method argument, an interactive terminal offers the available object-request methods. The command refuses to overwrite an existing request class. Generated requests extend `Skir\Server\Http\Requests\SkirFormRequest`; their `@extends` template annotation gives `skir()` the generated data-object return type for static analysis:
+
+```php
+/** @extends SkirFormRequest<GetUserRequestData> */
+final class GetUserFormRequest extends SkirFormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'userId' => ['required', 'integer', 'min:1'],
+        ];
+    }
+}
+```
+
+The generated stub denies authorization by default; change `authorize()` when implementing it. In the controller, use validated request data through `skir()`:
+
+```php
+public function getUser(GetUserFormRequest $request, SkirContext $context): UserData
+{
+    $payload = $request->skir(); // GetUserRequestData
+}
+```
+
+The Form Request receives only the decoded Skir request payload as its input while retaining Laravel request context such as the user, route, headers, and session. Its validation failures become package-local `skir_validation_failed` responses, and authorization failures become `skir_authorization_failed` responses. Exceptions deliberately thrown later by controller business logic retain Laravel's normal rendering and status behavior.
+
+Form Requests are optional. A controller can instead type-hint the generated object and call Laravel's `Validator` facade explicitly when that better suits the implementation.
+
+## Optional PHP client
+
+The server package does not depend on the [`php-skir/client`](https://github.com/php-skir/client) package. A client will usually be installed in a separate caller project that consumes the hosted RPC service:
+
+```bash
+composer require php-skir/client
+```
+
+That client repository documents transport setup and its optional `php artisan skir:generate-client` wrapper. Client generation is not part of the server package's main setup flow.
 
 ## Compatibility APIs
 
