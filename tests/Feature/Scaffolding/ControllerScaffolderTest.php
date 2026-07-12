@@ -363,7 +363,7 @@ final class ControllerScaffolderTest extends TestCase
     }
 
     #[Test]
-    public function scalar_and_union_direct_types_compile_but_scalar_form_requests_fail_without_writes(): void
+    public function scalar_and_union_direct_types_ignore_form_request_preference_and_keep_direct_signatures(): void
     {
         $direct = $this->method(
             name: 'Find',
@@ -386,21 +386,56 @@ final class ControllerScaffolderTest extends TestCase
         );
 
         $this->removeDirectory($this->temporaryDirectory.'/app');
-        mkdir($this->temporaryDirectory.'/app', 0777, true);
 
-        $this->expectException(SkirScaffoldingException::class);
-        $this->expectExceptionMessage('does not have an object request class');
+        $preferredResult = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+            [$direct],
+            ControllerStyle::Module,
+            null,
+            true,
+        ));
+        $source = (string) file_get_contents($preferredResult->createdPaths[0]);
 
-        try {
-            app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
-                [$direct],
-                ControllerStyle::Module,
-                null,
-                true,
-            ));
-        } finally {
-            self::assertSame([], glob($this->temporaryDirectory.'/app/*') ?: []);
-        }
+        self::assertStringContainsString(
+            'public function find(int|string|null $request, SkirContext $context): string|false',
+            $source,
+        );
+        self::assertStringNotContainsString('FormRequest', $source);
+        self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app/Http/Requests');
+    }
+
+    #[Test]
+    public function mixed_methods_generate_and_compose_only_eligible_form_requests(): void
+    {
+        $object = $this->method();
+        $scalar = $this->method(
+            name: 'Find',
+            enumCase: 'Find',
+            phpMethod: 'find',
+            requestType: 'string',
+            requestClass: null,
+            responseType: 'string',
+            responseClass: null,
+        );
+
+        $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+            [$object, $scalar],
+            ControllerStyle::Module,
+            null,
+            true,
+        ));
+        $controller = (string) file_get_contents(
+            $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php',
+        );
+
+        self::assertFileExists(
+            $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php',
+        );
+        self::assertFileDoesNotExist(
+            $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/FindFormRequest.php',
+        );
+        self::assertStringContainsString('GetUserFormRequest $request', $controller);
+        self::assertStringContainsString('find(string $request, SkirContext $context)', $controller);
+        self::assertCount(2, $result->createdPaths);
     }
 
     #[Test]
@@ -568,7 +603,7 @@ final class ControllerScaffolderTest extends TestCase
             [$method],
             ControllerStyle::Module,
             null,
-            false,
+            true,
         ));
         $source = (string) file_get_contents($result->createdPaths[0]);
 
@@ -577,6 +612,7 @@ final class ControllerScaffolderTest extends TestCase
             $source,
         );
         self::assertStringNotContainsString('$request', $source);
+        self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app/Http/Requests');
     }
 
     #[Test]

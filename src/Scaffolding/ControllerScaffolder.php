@@ -245,6 +245,10 @@ final class ControllerScaffolder implements ControllerScaffolding
         $renderedRequests = [];
 
         foreach ($selection->methods as $method) {
+            if ($method->requestClass === null) {
+                continue;
+            }
+
             $renderedRequests[$method->id()] = $this->formRequestScaffolder->render($method);
         }
 
@@ -263,6 +267,10 @@ final class ControllerScaffolder implements ControllerScaffolding
         $requestClasses = [];
 
         foreach ($selection->methods as $method) {
+            if ($method->requestClass === null) {
+                continue;
+            }
+
             $moduleNamespace = str_replace('.', '\\', $method->module);
             $requestClasses[$method->id()] = "{$requestNamespace}\\{$moduleNamespace}\\{$method->name}FormRequest";
         }

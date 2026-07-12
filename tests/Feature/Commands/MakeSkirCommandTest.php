@@ -126,6 +126,62 @@ final class MakeSkirCommandTest extends TestCase
         );
     }
 
+    public function test_scalar_only_selection_succeeds_with_form_request_preference_and_keeps_direct_signature(): void
+    {
+        config()->set('skir-server.scaffolding.form_requests', true);
+
+        $this->artisan('skir:make', [
+            '--method' => ['Status.Health.Ping'],
+            '--with-requests' => true,
+            '--no-interaction' => true,
+        ])->assertSuccessful();
+
+        $controller = file_get_contents(
+            $this->temporaryDirectory.'/app/Skir/Status/Health/HealthController.php',
+        );
+        self::assertIsString($controller);
+        self::assertStringContainsString('ping(string $request, SkirContext $context)', $controller);
+        self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app/Http/Requests');
+    }
+
+    public function test_invalid_request_namespace_fails_before_generator_even_for_an_eventually_scalar_selection(): void
+    {
+        config()->set('skir-server.scaffolding.request_namespace', 'Domain\\Invalid');
+        $runner = new RecordingGeneratorRunner;
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--method' => ['Status.Health.Ping'],
+            '--with-requests' => true,
+            '--no-interaction' => true,
+        ])->expectsOutputToContain('request_namespace')->assertFailed();
+
+        self::assertSame([], $runner->commands);
+        self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
+    }
+
+    public function test_all_with_form_requests_succeeds_and_generates_only_eligible_requests(): void
+    {
+        $this->artisan('skir:make', [
+            '--all' => true,
+            '--with-requests' => true,
+            '--no-interaction' => true,
+        ])->assertSuccessful();
+
+        self::assertFileExists(
+            $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php',
+        );
+        self::assertFileDoesNotExist(
+            $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/DeleteUserFormRequest.php',
+        );
+        self::assertFileDoesNotExist(
+            $this->temporaryDirectory.'/app/Http/Requests/Skir/Status/Health/PingFormRequest.php',
+        );
+        self::assertFileExists($this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php');
+        self::assertFileExists($this->temporaryDirectory.'/app/Skir/Status/Health/HealthController.php');
+    }
+
     public function test_configured_defaults_are_used_when_options_are_omitted(): void
     {
         config()->set('skir-server.scaffolding.controller_style', 'single');
