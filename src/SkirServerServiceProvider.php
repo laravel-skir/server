@@ -9,6 +9,7 @@ use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 use Skir\Server\Codecs\DenseJsonCodec;
 use Skir\Server\Codecs\SkirCodec;
+use Skir\Server\Commands\MakeSkirRequestCommand;
 use Skir\Server\Http\Controllers\SkirRpcController;
 use Skir\Server\Routing\SkirRouteDefinition;
 use Skir\Server\Scaffolding\Manifest\ManifestRepository;
@@ -41,6 +42,12 @@ final class SkirServerServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__.'/../config/skir-server.php' => config_path('skir-server.php'),
         ], 'skir-server-config');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                MakeSkirRequestCommand::class,
+            ]);
+        }
 
         LaravelRoute::macro('studio', function (bool $enabled = true) {
             /** @var LaravelRoute $this */
