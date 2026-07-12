@@ -85,6 +85,18 @@ final class SkirScaffoldingException extends RuntimeException
         );
     }
 
+    public static function plannedOutputCollision(string $firstPath, string $secondPath): self
+    {
+        return new self(
+            "Scaffolding outputs [{$firstPath}] and [{$secondPath}] resolve to the same planned destination.",
+        );
+    }
+
+    public static function renderedControllerDoesNotCompile(string $path, string $output): self
+    {
+        return new self("Rendered Skir controller for [{$path}] does not compile: {$output}");
+    }
+
     public static function unreadableManifest(string $path, string $generatorCommand): self
     {
         return new self(
@@ -191,6 +203,13 @@ final class SkirScaffoldingException extends RuntimeException
     {
         return new self(
             "Atomic publication is unavailable for form request [{$path}]. Ensure the application filesystem supports same-directory hard links.",
+        );
+    }
+
+    public static function controllerAtomicPublicationUnavailable(string $path): self
+    {
+        return new self(
+            "Atomic publication is unavailable for Skir controller [{$path}]. Ensure the application filesystem supports same-directory hard links.",
         );
     }
 

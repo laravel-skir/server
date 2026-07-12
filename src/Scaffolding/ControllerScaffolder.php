@@ -4,13 +4,11 @@ declare(strict_types=1);
 
 namespace Skir\Server\Scaffolding;
 
-use PhpParser\ParserFactory;
 use RuntimeException;
 use Skir\Server\Attributes\SkirMethod;
 use Skir\Server\Exceptions\SkirScaffoldingException;
 use Skir\Server\Scaffolding\Manifest\SkirMethodDefinition;
 use Skir\Server\SkirContext;
-use Throwable;
 
 final class ControllerScaffolder
 {
@@ -18,6 +16,7 @@ final class ControllerScaffolder
         private readonly AtomicFilePublisher $publisher,
         private readonly ScaffoldingFilesystem $filesystem,
         private readonly FormRequestScaffolder $formRequestScaffolder,
+        private readonly PhpSourceValidator $sourceValidator,
     ) {}
 
     public function scaffold(ScaffoldingSelection $selection): ControllerScaffoldingResult
@@ -25,6 +24,7 @@ final class ControllerScaffolder
         $renderedRequests = $this->renderRequests($selection);
         $requestClasses = $this->requestClasses($selection);
         $renderedControllers = $this->renderControllers($selection, $requestClasses);
+        $this->preflightPlannedDestinations($renderedRequests, $renderedControllers);
         $unchangedPaths = [];
         $requestsToCreate = [];
 
@@ -59,10 +59,44 @@ final class ControllerScaffolder
             $createdPaths,
             $unchangedPaths,
             array_merge(...array_map(
-                static fn (RenderedController $controller): array => $controller->routeHints,
+                static fn (RenderedController $controller): array => $controller->registrations,
                 $renderedControllers,
             )),
         );
+    }
+
+    /**
+     * @param  array<string, RenderedFile>  $renderedRequests
+     * @param  list<RenderedController>  $renderedControllers
+     */
+    private function preflightPlannedDestinations(
+        array $renderedRequests,
+        array $renderedControllers,
+    ): void {
+        $plannedPaths = [];
+
+        foreach ($renderedRequests as $renderedRequest) {
+            $plannedPaths[] = $renderedRequest->destinationPath;
+        }
+
+        foreach ($renderedControllers as $renderedController) {
+            $plannedPaths[] = $renderedController->file->destinationPath;
+        }
+
+        $destinations = [];
+
+        foreach ($plannedPaths as $plannedPath) {
+            $normalizedPath = strtolower(str_replace('\\', '/', $plannedPath));
+
+            if (isset($destinations[$normalizedPath])) {
+                throw SkirScaffoldingException::plannedOutputCollision(
+                    $destinations[$normalizedPath],
+                    $plannedPath,
+                );
+            }
+
+            $destinations[$normalizedPath] = $plannedPath;
+        }
     }
 
     /** @return array<string, RenderedFile> */
@@ -134,13 +168,14 @@ final class ControllerScaffolder
             $moduleSegments = explode('.', $module);
             $className = end($moduleSegments).'Controller';
             $namespace = $this->controllerNamespace().'\\'.implode('\\', $moduleSegments);
+            $controllerClass = "{$namespace}\\{$className}";
             $controllers[] = $this->renderController(
                 $namespace,
                 $className,
                 $moduleMethods,
                 $requestClasses,
                 false,
-                ["Skir::controller({$className}::class)"],
+                [new RouteRegistration($controllerClass)],
             );
         }
 
@@ -159,14 +194,14 @@ final class ControllerScaffolder
         foreach ($methods as $method) {
             $className = "{$method->name}Controller";
             $namespace = $this->controllerNamespace().'\\'.str_replace('.', '\\', $method->module);
-            $enumShortName = class_basename($method->enumClass);
+            $controllerClass = "{$namespace}\\{$className}";
             $controllers[] = $this->renderController(
                 $namespace,
                 $className,
                 [$method],
                 $requestClasses,
                 true,
-                ["Skir::method({$enumShortName}::{$method->enumCase}, {$className}::class)"],
+                [new RouteRegistration($controllerClass, $method->enumClass, $method->enumCase)],
             );
         }
 
@@ -188,14 +223,14 @@ final class ControllerScaffolder
             $selection->methods,
             $requestClasses,
             false,
-            ["Skir::controller({$className}::class)"],
+            [new RouteRegistration($controllerClass)],
         );
     }
 
     /**
      * @param  list<SkirMethodDefinition>  $methods
      * @param  array<string, string>  $requestClasses
-     * @param  list<string>  $routeHints
+     * @param  list<RouteRegistration>  $registrations
      */
     private function renderController(
         string $namespace,
@@ -203,7 +238,7 @@ final class ControllerScaffolder
         array $methods,
         array $requestClasses,
         bool $invokable,
-        array $routeHints,
+        array $registrations,
     ): RenderedController {
         $this->validateControllerMethods($className, $methods, $invokable);
         $imports = new PhpImportMap($className);
@@ -244,17 +279,13 @@ final class ControllerScaffolder
         ]);
         $destinationPath = $this->destinationPath($namespace, $className);
 
-        try {
-            (new ParserFactory)->createForHostVersion()->parse($source);
-        } catch (Throwable $exception) {
-            throw SkirScaffoldingException::invalidRenderedController($destinationPath, $exception);
-        }
+        $this->sourceValidator->validate($source, $destinationPath);
 
         return new RenderedController(
             new RenderedFile($destinationPath, $source),
             $className,
             $methods,
-            $this->resolvedRouteHints($routeHints, $methods, $imports, $invokable),
+            $registrations,
         );
     }
 
@@ -270,7 +301,7 @@ final class ControllerScaffolder
             : $imports->alias($formRequestClass);
         $responseType = $this->resolveManifestType($method->responseType, $method->responseClass, $imports);
         $phpMethod = $invokable ? '__invoke' : $method->phpMethod;
-        $requestParameter = $requestType === 'void' ? '' : "{$requestType} \$request, ";
+        $requestParameter = "{$requestType} \$request, ";
         $attribute = $imports->alias(SkirMethod::class);
         $context = $imports->alias(SkirContext::class);
         $logicException = $imports->alias('LogicException');
@@ -301,27 +332,6 @@ PHP;
         );
 
         return is_string($resolvedType) ? $resolvedType : $manifestType;
-    }
-
-    /**
-     * @param  list<string>  $routeHints
-     * @param  list<SkirMethodDefinition>  $methods
-     * @return list<string>
-     */
-    private function resolvedRouteHints(
-        array $routeHints,
-        array $methods,
-        PhpImportMap $imports,
-        bool $invokable,
-    ): array {
-        if (! $invokable) {
-            return $routeHints;
-        }
-
-        $method = $methods[0];
-        $enumAlias = $imports->alias($method->enumClass);
-
-        return [str_replace(class_basename($method->enumClass), $enumAlias, $routeHints[0])];
     }
 
     /** @param list<SkirMethodDefinition> $methods */
@@ -471,6 +481,7 @@ PHP;
                 $temporaryPath,
                 $rendered->destinationPath,
                 SkirScaffoldingException::existingController(...),
+                SkirScaffoldingException::controllerAtomicPublicationUnavailable(...),
             );
             $published = true;
         } finally {

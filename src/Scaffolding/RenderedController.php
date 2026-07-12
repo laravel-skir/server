@@ -10,12 +10,12 @@ final readonly class RenderedController
 {
     /**
      * @param  list<SkirMethodDefinition>  $methods
-     * @param  list<string>  $routeHints
+     * @param  list<RouteRegistration>  $registrations
      */
     public function __construct(
         public RenderedFile $file,
         public string $className,
         public array $methods,
-        public array $routeHints,
+        public array $registrations,
     ) {}
 }

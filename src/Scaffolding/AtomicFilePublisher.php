@@ -15,11 +15,15 @@ final class AtomicFilePublisher
         private readonly ?Closure $linker = null,
     ) {}
 
-    /** @param Closure(string): SkirScaffoldingException $collisionException */
+    /**
+     * @param  Closure(string): SkirScaffoldingException  $collisionException
+     * @param  Closure(string): SkirScaffoldingException  $unavailableException
+     */
     public function publish(
         string $temporaryPath,
         string $destinationPath,
         Closure $collisionException,
+        Closure $unavailableException,
     ): void {
         if ($this->link($temporaryPath, $destinationPath)) {
             return;
@@ -29,7 +33,7 @@ final class AtomicFilePublisher
             throw $collisionException($destinationPath);
         }
 
-        throw SkirScaffoldingException::atomicPublicationUnavailable($destinationPath);
+        throw $unavailableException($destinationPath);
     }
 
     private function link(string $temporaryPath, string $destinationPath): bool

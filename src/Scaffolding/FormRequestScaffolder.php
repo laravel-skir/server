@@ -74,6 +74,7 @@ final class FormRequestScaffolder
                 $temporaryPath,
                 $rendered->destinationPath,
                 SkirScaffoldingException::existingFile(...),
+                SkirScaffoldingException::atomicPublicationUnavailable(...),
             );
             $published = true;
         } finally {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Skir\Server\Tests\Feature\Scaffolding;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use Skir\Server\Exceptions\SkirScaffoldingException;
@@ -12,6 +13,8 @@ use Skir\Server\Scaffolding\ControllerScaffolder;
 use Skir\Server\Scaffolding\ControllerStyle;
 use Skir\Server\Scaffolding\FormRequestScaffolder;
 use Skir\Server\Scaffolding\Manifest\SkirMethodDefinition;
+use Skir\Server\Scaffolding\PhpSourceValidator;
+use Skir\Server\Scaffolding\RouteRegistration;
 use Skir\Server\Scaffolding\ScaffoldingFilesystem;
 use Skir\Server\Scaffolding\ScaffoldingSelection;
 use Skir\Server\Tests\TestCase;
@@ -108,7 +111,12 @@ final class ControllerScaffolderTest extends TestCase
         $path = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
         self::assertSame([$path], $result->createdPaths);
         self::assertSame([], $result->unchangedPaths);
-        self::assertSame(['Skir::controller(UsersController::class)'], $result->routeHints);
+        self::assertEquals([
+            new RouteRegistration('App\\Skir\\Admin\\Users\\UsersController'),
+        ], $result->registrations);
+        self::assertSame([
+            'Skir::controller(\\App\\Skir\\Admin\\Users\\UsersController::class)',
+        ], $result->routeHints);
         self::assertFileExists($path);
 
         $source = file_get_contents($path);
@@ -138,9 +146,12 @@ final class ControllerScaffolderTest extends TestCase
         $deletePath = $this->temporaryDirectory.'/app/Skir/Admin/Users/DeleteUserController.php';
         self::assertSame([$getPath, $deletePath], $result->createdPaths);
         self::assertSame([
-            'Skir::method(AdminUsersMethod::GetUser, GetUserController::class)',
-            'Skir::method(AdminUsersMethod::DeleteUser, DeleteUserController::class)',
+            'Skir::method(\\App\\Skir\\Methods\\AdminUsersMethod::GetUser, \\App\\Skir\\Admin\\Users\\GetUserController::class)',
+            'Skir::method(\\App\\Skir\\Methods\\AdminUsersMethod::DeleteUser, \\App\\Skir\\Admin\\Users\\DeleteUserController::class)',
         ], $result->routeHints);
+        self::assertSame('App\\Skir\\Admin\\Users\\GetUserController', $result->registrations[0]->controllerClass);
+        self::assertSame('App\\Skir\\Methods\\AdminUsersMethod', $result->registrations[0]->enumClass);
+        self::assertSame('GetUser', $result->registrations[0]->enumCase);
         self::assertStringContainsString(
             'public function __invoke(GetUserRequest $request, SkirContext $context): User',
             (string) file_get_contents($getPath),
@@ -169,7 +180,9 @@ final class ControllerScaffolderTest extends TestCase
 
         $path = $this->temporaryDirectory.'/app/Skir/SkirController.php';
         self::assertSame([$path], $result->createdPaths);
-        self::assertSame(['Skir::controller(SkirController::class)'], $result->routeHints);
+        self::assertSame([
+            'Skir::controller(\\App\\Skir\\SkirController::class)',
+        ], $result->routeHints);
         self::assertStringContainsString('public function getInvoice(string $request, SkirContext $context): ?int', (string) file_get_contents($path));
 
         unlink($path);
@@ -246,7 +259,12 @@ final class ControllerScaffolderTest extends TestCase
         );
         $publisher = new AtomicFilePublisher($filesystem);
         $formRequestScaffolder = new FormRequestScaffolder($publisher, $filesystem);
-        $scaffolder = new ControllerScaffolder($publisher, $filesystem, $formRequestScaffolder);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            $formRequestScaffolder,
+            new PhpSourceValidator($filesystem),
+        );
 
         $scaffolder->scaffold(new ScaffoldingSelection(
             [$this->method()],
@@ -281,7 +299,12 @@ final class ControllerScaffolderTest extends TestCase
         );
         $publisher = new AtomicFilePublisher($filesystem);
         $formRequestScaffolder = new FormRequestScaffolder($publisher, $filesystem);
-        $scaffolder = new ControllerScaffolder($publisher, $filesystem, $formRequestScaffolder);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            $formRequestScaffolder,
+            new PhpSourceValidator($filesystem),
+        );
         $selection = new ScaffoldingSelection([
             $this->method(),
             $this->method(
@@ -416,6 +439,123 @@ final class ControllerScaffolderTest extends TestCase
     }
 
     #[Test]
+    public function request_and_controller_planned_for_the_same_destination_fail_before_writes(): void
+    {
+        $sharedClass = 'App\\Http\\Requests\\Skir\\Admin\\Users\\GetUserFormRequest';
+
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage('resolve to the same planned destination');
+
+        try {
+            app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Single,
+                $sharedClass,
+                true,
+            ));
+        } finally {
+            self::assertSame([], glob($this->temporaryDirectory.'/app/*') ?: []);
+        }
+    }
+
+    #[Test]
+    public function case_only_planned_controller_collisions_fail_before_writes(): void
+    {
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage('resolve to the same planned destination');
+
+        try {
+            app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection([
+                $this->method(),
+                $this->method(
+                    module: 'admin.users',
+                    name: 'getuser',
+                    enumClass: 'App\\Skir\\Methods\\LowerAdminUsersMethod',
+                    enumCase: 'GetUser',
+                    phpMethod: 'getUserLower',
+                ),
+            ], ControllerStyle::Invokable, null, false));
+        } finally {
+            self::assertSame([], glob($this->temporaryDirectory.'/app/*') ?: []);
+        }
+    }
+
+    #[Test]
+    #[DataProvider('invalidPhpTypeProvider')]
+    public function semantically_invalid_php_types_fail_lint_before_writes(
+        string $requestType,
+        string $responseType,
+    ): void {
+        $method = $this->method(
+            requestType: $requestType,
+            requestClass: null,
+            responseType: $responseType,
+            responseClass: null,
+        );
+
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage('Rendered Skir controller');
+
+        try {
+            app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+                [$method],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+        } finally {
+            self::assertSame([], glob($this->temporaryDirectory.'/app/*') ?: []);
+        }
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function invalidPhpTypeProvider(): iterable
+    {
+        yield 'never parameter' => ['never', 'string'];
+        yield 'void parameter' => ['void', 'string'];
+        yield 'mixed union parameter' => ['mixed|null', 'string'];
+        yield 'redundant nullable return' => ['string', '?mixed'];
+    }
+
+    #[Test]
+    public function representative_output_in_every_layout_passes_php_lint(): void
+    {
+        foreach (ControllerStyle::cases() as $style) {
+            $method = match ($style) {
+                ControllerStyle::Module => $this->method(
+                    requestType: 'int|string|null',
+                    requestClass: null,
+                    responseType: 'string|false',
+                    responseClass: null,
+                ),
+                ControllerStyle::Invokable => $this->method(
+                    requestType: '?GetUserRequest',
+                    responseType: 'User|null',
+                ),
+                ControllerStyle::Single => $this->method(
+                    requestType: 'GetUserRequest',
+                    responseType: '?User',
+                ),
+            };
+            $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+                [$method],
+                $style,
+                null,
+                false,
+            ));
+
+            foreach ($result->createdPaths as $path) {
+                $lint = new Process([PHP_BINARY, '-l', $path]);
+                $lint->run();
+                self::assertTrue($lint->isSuccessful(), $lint->getErrorOutput().$lint->getOutput());
+            }
+
+            $this->removeDirectory($this->temporaryDirectory.'/app');
+            mkdir($this->temporaryDirectory.'/app', 0777, true);
+        }
+    }
+
+    #[Test]
     public function controller_namespaces_and_manifest_identifiers_must_be_canonical_and_app_owned(): void
     {
         config()->set('skir-server.scaffolding.controller_namespace', 'Domain\\Skir');
@@ -507,6 +647,7 @@ final class ControllerScaffolderTest extends TestCase
             $publisher,
             $filesystem,
             app(FormRequestScaffolder::class),
+            new PhpSourceValidator($filesystem),
         );
         $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
 
@@ -526,6 +667,41 @@ final class ControllerScaffolderTest extends TestCase
         }
 
         self::assertSame('<?php // competing writer', file_get_contents($controllerPath));
+        self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function unavailable_atomic_controller_publication_uses_controller_specific_wording(): void
+    {
+        $filesystem = new ScaffoldingFilesystem;
+        $publisher = new AtomicFilePublisher(
+            $filesystem,
+            static fn (string $temporaryPath, string $destinationPath): bool => false,
+        );
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            app(FormRequestScaffolder::class),
+            new PhpSourceValidator($filesystem),
+        );
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('Unavailable controller publication should fail.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertSame(
+                "Atomic publication is unavailable for Skir controller [{$controllerPath}]. Ensure the application filesystem supports same-directory hard links.",
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertFileDoesNotExist($controllerPath);
         self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
     }
 

@@ -320,7 +320,10 @@ PHP."\n", file_get_contents($expectedPath));
             app(FormRequestScaffolder::class)->scaffold($this->definition());
             self::fail('Publication should fail when atomic hard links are unavailable.');
         } catch (SkirScaffoldingException $exception) {
-            self::assertStringContainsString('Atomic publication is unavailable', $exception->getMessage());
+            self::assertSame(
+                "Atomic publication is unavailable for form request [{$destinationPath}]. Ensure the application filesystem supports same-directory hard links.",
+                $exception->getMessage(),
+            );
         }
 
         self::assertFileDoesNotExist($destinationPath);
@@ -339,6 +342,7 @@ PHP."\n", file_get_contents($expectedPath));
             $temporaryPath,
             $destinationPath,
             SkirScaffoldingException::existingFile(...),
+            SkirScaffoldingException::atomicPublicationUnavailable(...),
         );
 
         self::assertSame('published bytes', file_get_contents($destinationPath));
