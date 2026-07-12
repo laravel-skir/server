@@ -12,6 +12,8 @@ use Throwable;
 
 final class FormRequestScaffolder
 {
+    public function __construct(private readonly AtomicFilePublisher $publisher) {}
+
     public function render(SkirMethodDefinition $method, ?string $className = null): RenderedFile
     {
         if ($method->requestClass === null) {
@@ -70,18 +72,10 @@ final class FormRequestScaffolder
                 throw SkirScaffoldingException::unableToWriteFile($rendered->destinationPath);
             }
 
-            if (file_exists($rendered->destinationPath)) {
-                throw SkirScaffoldingException::existingFile($rendered->destinationPath);
-            }
-
-            if (! rename($temporaryPath, $rendered->destinationPath)) {
-                throw SkirScaffoldingException::unableToWriteFile($rendered->destinationPath);
-            }
-
-            $temporaryPath = null;
+            $this->publisher->publish($temporaryPath, $rendered->destinationPath);
         } finally {
-            if ($temporaryPath !== null && file_exists($temporaryPath)) {
-                unlink($temporaryPath);
+            if (file_exists($temporaryPath)) {
+                @unlink($temporaryPath);
             }
         }
 
