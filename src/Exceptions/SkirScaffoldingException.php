@@ -45,6 +45,36 @@ final class SkirScaffoldingException extends RuntimeException
         return new self("Skir controller [{$path}] already exists and was not modified.");
     }
 
+    public static function invalidExistingController(string $path, Throwable $exception): self
+    {
+        return new self("Existing Skir controller [{$path}] is invalid PHP: {$exception->getMessage()}", previous: $exception);
+    }
+
+    public static function missingControllerClass(string $path, string $class): self
+    {
+        return new self("Existing Skir controller [{$path}] does not declare expected class [{$class}].");
+    }
+
+    public static function occupiedControllerMethod(
+        string $path,
+        string $method,
+        string $identity,
+    ): self {
+        return new self(
+            "Skir controller [{$path}] PHP method [{$method}] already exists without Skir identity [{$identity}].",
+        );
+    }
+
+    public static function duplicateControllerIdentity(string $path, string $identity): self
+    {
+        return new self("Skir controller [{$path}] declares Skir identity [{$identity}] more than once.");
+    }
+
+    public static function controllerChangedDuringScaffolding(string $path): self
+    {
+        return new self("Skir controller [{$path}] changed during scaffolding and was not modified.");
+    }
+
     public static function invalidControllerNamespace(mixed $namespace): self
     {
         $displayNamespace = is_scalar($namespace) ? (string) $namespace : get_debug_type($namespace);

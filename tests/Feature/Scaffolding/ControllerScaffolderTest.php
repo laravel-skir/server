@@ -633,7 +633,7 @@ final class ControllerScaffolderTest extends TestCase
             app(ControllerScaffolder::class)->scaffold($selection);
             self::fail('An existing controller should fail.');
         } catch (SkirScaffoldingException $exception) {
-            self::assertStringContainsString('already exists and was not modified', $exception->getMessage());
+            self::assertStringContainsString('does not declare expected class', $exception->getMessage());
         }
 
         self::assertSame('<?php // keep', file_get_contents($existingPath));
@@ -730,6 +730,283 @@ final class ControllerScaffolderTest extends TestCase
 
         self::assertFileDoesNotExist($controllerPath);
         self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function regeneration_adds_missing_module_methods_without_replacing_handwritten_code(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+namespace App\Skir\Admin\Users;
+
+use App\Skir\Methods\AdminUsersMethod;
+use Skir\Server\Attributes\SkirMethod;
+
+final class UsersController
+{
+    #[SkirMethod(AdminUsersMethod::GetUser)]
+    public function getUser(): string
+    {
+        return 'handwritten'; // must survive regeneration
+    }
+}
+PHP);
+        $selection = new ScaffoldingSelection([
+            $this->method(),
+            $this->method(name: 'DeleteUser', enumCase: 'DeleteUser', phpMethod: 'deleteUser'),
+        ], ControllerStyle::Module, null, false);
+
+        $result = app(ControllerScaffolder::class)->scaffold($selection);
+
+        self::assertSame([], $result->createdPaths);
+        self::assertSame([$controllerPath], $result->updatedPaths);
+        self::assertSame([], $result->unchangedPaths);
+        self::assertSame([], $result->warnings);
+        self::assertStringContainsString("return 'handwritten'; // must survive regeneration", (string) file_get_contents($controllerPath));
+        self::assertStringContainsString('public function deleteUser(', (string) file_get_contents($controllerPath));
+
+        $sourceAfterFirstRun = file_get_contents($controllerPath);
+        $secondResult = app(ControllerScaffolder::class)->scaffold($selection);
+
+        self::assertSame($sourceAfterFirstRun, file_get_contents($controllerPath));
+        self::assertSame([], $secondResult->updatedPaths);
+        self::assertSame([$controllerPath], $secondResult->unchangedPaths);
+    }
+
+    #[Test]
+    public function regeneration_adds_missing_methods_to_a_single_controller(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/RpcController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, <<<'PHP'
+<?php
+
+namespace App\Skir;
+
+final class RpcController
+{
+}
+PHP);
+
+        $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+            [$this->method()],
+            ControllerStyle::Single,
+            'App\Skir\RpcController',
+            false,
+        ));
+
+        self::assertSame([$controllerPath], $result->updatedPaths);
+        self::assertStringContainsString('#[SkirMethod(AdminUsersMethod::GetUser)]', (string) file_get_contents($controllerPath));
+    }
+
+    #[Test]
+    public function stale_controller_methods_are_reported_but_never_deleted(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, <<<'PHP'
+<?php
+
+namespace App\Skir\Admin\Users;
+
+use App\Skir\Methods\AdminUsersMethod;
+use Skir\Server\Attributes\SkirMethod;
+
+final class UsersController
+{
+    #[SkirMethod(AdminUsersMethod::OldMethod)]
+    public function oldMethod(): string
+    {
+        return 'keep me';
+    }
+}
+PHP);
+
+        $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+            [$this->method()],
+            ControllerStyle::Module,
+            null,
+            false,
+        ));
+
+        self::assertCount(1, $result->warnings);
+        self::assertStringContainsString('AdminUsersMethod::OldMethod', $result->warnings[0]);
+        self::assertStringContainsString("return 'keep me';", (string) file_get_contents($controllerPath));
+    }
+
+    #[Test]
+    public function an_existing_method_conflict_prevents_controller_and_request_writes(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $requestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, <<<'PHP'
+<?php
+
+namespace App\Skir\Admin\Users;
+
+final class UsersController
+{
+    public function getUser(): string
+    {
+        return 'occupied';
+    }
+}
+PHP);
+        $original = file_get_contents($controllerPath);
+
+        try {
+            app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                true,
+            ));
+            self::fail('The occupied controller method should fail preflight.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('already exists without Skir identity', $exception->getMessage());
+        }
+
+        self::assertSame($original, file_get_contents($controllerPath));
+        self::assertFileDoesNotExist($requestPath);
+    }
+
+    #[Test]
+    public function invalid_existing_controller_php_prevents_request_writes(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $requestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, '<?php namespace App\Skir\Admin\Users; final class UsersController {');
+
+        try {
+            app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                true,
+            ));
+            self::fail('Invalid existing PHP should fail preflight.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('is invalid PHP', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($requestPath);
+    }
+
+    #[Test]
+    public function additive_regeneration_keeps_existing_requests_and_creates_only_missing_requests(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $existingRequestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php';
+        $missingRequestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/DeleteUserFormRequest.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        mkdir(dirname($existingRequestPath), 0777, true);
+        file_put_contents($controllerPath, <<<'PHP'
+<?php
+
+namespace App\Skir\Admin\Users;
+
+final class UsersController
+{
+}
+PHP);
+        file_put_contents($existingRequestPath, '<?php // application-owned request');
+
+        $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection([
+            $this->method(),
+            $this->method(
+                name: 'DeleteUser',
+                enumCase: 'DeleteUser',
+                phpMethod: 'deleteUser',
+                requestType: 'DeleteUserRequest',
+                requestClass: 'App\Skir\Dto\DeleteUserRequest',
+            ),
+        ], ControllerStyle::Module, null, true));
+
+        self::assertSame('<?php // application-owned request', file_get_contents($existingRequestPath));
+        self::assertFileExists($missingRequestPath);
+        self::assertContains($existingRequestPath, $result->unchangedPaths);
+        self::assertContains($missingRequestPath, $result->createdPaths);
+        self::assertSame([$controllerPath], $result->updatedPaths);
+    }
+
+    #[Test]
+    public function rerunning_an_invokable_controller_is_a_clean_no_op(): void
+    {
+        $selection = new ScaffoldingSelection(
+            [$this->method()],
+            ControllerStyle::Invokable,
+            null,
+            false,
+        );
+        $first = app(ControllerScaffolder::class)->scaffold($selection);
+        $source = file_get_contents($first->createdPaths[0]);
+
+        $second = app(ControllerScaffolder::class)->scaffold($selection);
+
+        self::assertSame($source, file_get_contents($first->createdPaths[0]));
+        self::assertSame([$first->createdPaths[0]], $second->unchangedPaths);
+        self::assertSame([], $second->createdPaths);
+        self::assertSame([], $second->updatedPaths);
+    }
+
+    #[Test]
+    public function a_controller_changed_during_preflight_prevents_all_request_and_controller_writes(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $requestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, <<<'PHP'
+<?php
+
+namespace App\Skir\Admin\Users;
+
+final class UsersController
+{
+}
+PHP);
+        $controllerReads = 0;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($controllerPath, &$controllerReads): void {
+                if ($operation !== 'read' || $path !== $controllerPath) {
+                    return;
+                }
+
+                $controllerReads++;
+
+                if ($controllerReads === 2) {
+                    file_put_contents($controllerPath, '<?php // competing application edit');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                true,
+            ));
+            self::fail('A concurrent controller edit should fail preflight.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('changed during scaffolding', $exception->getMessage());
+        }
+
+        self::assertSame('<?php // competing application edit', file_get_contents($controllerPath));
+        self::assertFileDoesNotExist($requestPath);
     }
 
     private function method(

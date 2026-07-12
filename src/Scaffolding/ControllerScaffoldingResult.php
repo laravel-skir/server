@@ -13,11 +13,15 @@ final readonly class ControllerScaffoldingResult
      * @param  list<string>  $createdPaths
      * @param  list<string>  $unchangedPaths
      * @param  list<RouteRegistration>  $registrations
+     * @param  list<string>  $updatedPaths
+     * @param  list<string>  $warnings
      */
     public function __construct(
         public array $createdPaths,
         public array $unchangedPaths,
         public array $registrations,
+        public array $updatedPaths = [],
+        public array $warnings = [],
     ) {
         $this->routeHints = array_map(
             static fn (RouteRegistration $registration): string => $registration->snippet(),

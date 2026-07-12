@@ -118,6 +118,19 @@ final class ScaffoldingFilesystem
         }
     }
 
+    public function replace(string $sourcePath, string $destinationPath): void
+    {
+        $replaced = $this->run(
+            'replace',
+            $destinationPath,
+            static fn (): bool => rename($sourcePath, $destinationPath),
+        );
+
+        if ($replaced !== true) {
+            throw SkirScaffoldingException::filesystemOperationFailed('replace', $destinationPath);
+        }
+    }
+
     private function run(string $operation, string $path, Closure $callback): mixed
     {
         try {

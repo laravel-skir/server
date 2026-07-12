@@ -9,8 +9,14 @@ final class PhpImportMap
     /** @var array<string, string> */
     private array $aliasesByClass = [];
 
+    /** @var array<string, string> */
+    private array $classesByNormalizedName = [];
+
     /** @var array<string, true> */
     private array $usedAliases = [];
+
+    /** @var array<string, string> */
+    private array $newAliasesByClass = [];
 
     public function __construct(string $declaredClassName)
     {
@@ -19,8 +25,10 @@ final class PhpImportMap
 
     public function add(string $class): string
     {
-        if (isset($this->aliasesByClass[$class])) {
-            return $this->aliasesByClass[$class];
+        $normalizedClass = strtolower(ltrim($class, '\\'));
+
+        if (isset($this->classesByNormalizedName[$normalizedClass])) {
+            return $this->aliasesByClass[$this->classesByNormalizedName[$normalizedClass]];
         }
 
         $segments = explode('\\', $class);
@@ -35,14 +43,30 @@ final class PhpImportMap
         }
 
         $this->aliasesByClass[$class] = $alias;
+        $this->classesByNormalizedName[$normalizedClass] = $class;
+        $this->newAliasesByClass[$class] = $alias;
         $this->usedAliases[strtolower($alias)] = true;
 
         return $alias;
     }
 
+    public function registerExisting(string $class, string $alias): void
+    {
+        $this->aliasesByClass[$class] = $alias;
+        $this->classesByNormalizedName[strtolower(ltrim($class, '\\'))] = $class;
+        $this->usedAliases[strtolower($alias)] = true;
+    }
+
+    public function reserveAlias(string $alias): void
+    {
+        $this->usedAliases[strtolower($alias)] = true;
+    }
+
     public function alias(string $class): string
     {
-        return $this->aliasesByClass[$class];
+        $registeredClass = $this->classesByNormalizedName[strtolower(ltrim($class, '\\'))];
+
+        return $this->aliasesByClass[$registeredClass];
     }
 
     public function source(): string
@@ -57,5 +81,11 @@ final class PhpImportMap
         }
 
         return implode("\n", $imports);
+    }
+
+    /** @return array<string, string> */
+    public function newImports(): array
+    {
+        return $this->newAliasesByClass;
     }
 }
