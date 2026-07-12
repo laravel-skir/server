@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Skir\Server\Tests\Feature;
 
+use Illuminate\Auth\GenericUser;
+use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use InvalidArgumentException;
@@ -12,6 +14,7 @@ use Skir\Runtime\MethodDescriptor;
 use Skir\Runtime\Type;
 use Skir\Server\Codecs\SkirCodecs;
 use Skir\Server\Contracts\SkirMethodReference;
+use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
 use Skir\Server\SkirContext;
@@ -20,6 +23,13 @@ use TypeError;
 
 final class NullableControllerRequestTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config(['app.key' => 'base64:'.base64_encode(str_repeat('a', 32))]);
+    }
+
     #[Test]
     public function nullable_standard_generated_requests_receive_null_without_hydration(): void
     {
@@ -63,21 +73,95 @@ final class NullableControllerRequestTest extends TestCase
     }
 
     #[Test]
-    public function nullable_form_requests_receive_null_without_resolution(): void
+    public function nullable_form_requests_authorize_null_without_validation_or_hydration(): void
     {
         $this->registerRoute(NullableRequestMethod::FormRequest, NullableFormRequestController::class);
 
         NullableGeneratedFormRequest::$authorizations = 0;
         NullableGeneratedFormRequest::$instances = 0;
+        NullableGeneratedFormRequest::$preparations = 0;
         NullableGeneratedFormRequest::$ruleResolutions = 0;
+        NullableGeneratedFormRequest::$skirClassResolutions = 0;
+        NullableFormPayload::$hydrations = 0;
+        NullableGeneratedFormRequest::$authorizationContext = [];
+        $this->be(new GenericUser(['id' => 42]));
 
-        $this->postNullRequest('/nullable-form-request', 'FormRequest')
+        $this->withSession(['skir_session' => 'session-123'])
+            ->withHeader('X-Skir-Trace', 'trace-123');
+
+        $this->postNullRequest('/nullable-form-request/acme', 'FormRequest')
             ->assertOk()
             ->assertExactJson(['received' => null]);
 
-        $this->assertSame(0, NullableGeneratedFormRequest::$authorizations);
-        $this->assertSame(0, NullableGeneratedFormRequest::$instances);
+        $this->assertSame(1, NullableGeneratedFormRequest::$authorizations);
+        $this->assertSame(1, NullableGeneratedFormRequest::$instances);
+        $this->assertSame(1, NullableGeneratedFormRequest::$preparations);
         $this->assertSame(0, NullableGeneratedFormRequest::$ruleResolutions);
+        $this->assertSame(0, NullableGeneratedFormRequest::$skirClassResolutions);
+        $this->assertSame(0, NullableFormPayload::$hydrations);
+        $this->assertSame([
+            'userId' => 42,
+            'tenant' => 'acme',
+            'trace' => 'trace-123',
+            'session' => 'session-123',
+            'input' => [],
+        ], NullableGeneratedFormRequest::$authorizationContext);
+    }
+
+    #[Test]
+    public function generated_default_deny_nullable_form_requests_reject_null(): void
+    {
+        $this->registerRoute(NullableRequestMethod::DefaultDenyFormRequest, DefaultDenyNullableFormController::class);
+
+        DefaultDenyNullableFormRequest::$authorizations = 0;
+        DefaultDenyNullableFormRequest::$ruleResolutions = 0;
+        DefaultDenyNullableFormController::$invocations = 0;
+
+        $this->postNullRequest('/default-deny-form-request', 'DefaultDenyFormRequest')
+            ->assertForbidden()
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_authorization_failed',
+                    'message' => 'This action is unauthorized.',
+                ],
+            ]);
+
+        $this->assertSame(1, DefaultDenyNullableFormRequest::$authorizations);
+        $this->assertSame(0, DefaultDenyNullableFormRequest::$ruleResolutions);
+        $this->assertSame(0, DefaultDenyNullableFormController::$invocations);
+    }
+
+    #[Test]
+    public function nullable_form_requests_preserve_custom_failed_authorization_behavior(): void
+    {
+        $this->registerRoute(NullableRequestMethod::CustomDenyFormRequest, CustomDenyNullableFormController::class);
+
+        CustomDenyNullableFormRequest::$failedAuthorizations = 0;
+        CustomDenyNullableFormController::$invocations = 0;
+
+        $this->postNullRequest('/custom-deny-form-request', 'CustomDenyFormRequest')
+            ->assertUnprocessable()
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_invalid_request',
+                    'message' => 'Custom nullable authorization failure.',
+                ],
+            ]);
+
+        $this->assertSame(1, CustomDenyNullableFormRequest::$failedAuthorizations);
+        $this->assertSame(0, CustomDenyNullableFormController::$invocations);
+    }
+
+    #[Test]
+    public function nullable_laravel_form_requests_must_extend_the_skir_form_request(): void
+    {
+        $this->registerRoute(NullableRequestMethod::LaravelFormRequest, NullableLaravelFormController::class);
+
+        $this->withoutExceptionHandling();
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('must extend');
+
+        $this->postNullRequest('/laravel-form-request', 'LaravelFormRequest');
     }
 
     #[Test]
@@ -93,7 +177,10 @@ final class NullableControllerRequestTest extends TestCase
         NullableRequestStatusHydrations::$count = 0;
         NullableGeneratedFormRequest::$authorizations = 0;
         NullableGeneratedFormRequest::$instances = 0;
+        NullableGeneratedFormRequest::$preparations = 0;
         NullableGeneratedFormRequest::$ruleResolutions = 0;
+        NullableGeneratedFormRequest::$skirClassResolutions = 0;
+        NullableFormPayload::$hydrations = 0;
 
         $this->postJson('/nullable-standard', ['method' => 'Standard', 'request' => ['name' => 'standard']])
             ->assertOk()
@@ -104,7 +191,7 @@ final class NullableControllerRequestTest extends TestCase
         $this->postJson('/nullable-enum', ['method' => 'EnumValue', 'request' => 'active'])
             ->assertOk()
             ->assertExactJson(['received' => 'active']);
-        $this->postJson('/nullable-form-request', ['method' => 'FormRequest', 'request' => ['name' => 'form']])
+        $this->postJson('/nullable-form-request/acme', ['method' => 'FormRequest', 'request' => ['name' => 'form']])
             ->assertOk()
             ->assertExactJson(['received' => 'form']);
 
@@ -113,7 +200,10 @@ final class NullableControllerRequestTest extends TestCase
         $this->assertSame(1, NullableRequestStatusHydrations::$count);
         $this->assertSame(1, NullableGeneratedFormRequest::$authorizations);
         $this->assertSame(1, NullableGeneratedFormRequest::$instances);
+        $this->assertSame(1, NullableGeneratedFormRequest::$preparations);
         $this->assertSame(1, NullableGeneratedFormRequest::$ruleResolutions);
+        $this->assertSame(1, NullableGeneratedFormRequest::$skirClassResolutions);
+        $this->assertSame(1, NullableFormPayload::$hydrations);
     }
 
     #[Test]
@@ -174,9 +264,13 @@ final class NullableControllerRequestTest extends TestCase
         NullableRequestMethod $method,
         string $controller,
     ): void {
-        Route::skirRpc($this->routePath($method), [
+        $route = Route::skirRpc($this->routePath($method), [
             Skir::method($method, $controller),
         ], SkirCodecs::standardJson());
+
+        if ($method === NullableRequestMethod::FormRequest) {
+            $route->middleware('web');
+        }
     }
 
     private function postNullRequest(string $uri, string $method): TestResponse
@@ -193,7 +287,10 @@ final class NullableControllerRequestTest extends TestCase
             NullableRequestMethod::Standard => '/nullable-standard',
             NullableRequestMethod::Data => '/nullable-data',
             NullableRequestMethod::EnumValue => '/nullable-enum',
-            NullableRequestMethod::FormRequest => '/nullable-form-request',
+            NullableRequestMethod::FormRequest => '/nullable-form-request/{tenant}',
+            NullableRequestMethod::DefaultDenyFormRequest => '/default-deny-form-request',
+            NullableRequestMethod::CustomDenyFormRequest => '/custom-deny-form-request',
+            NullableRequestMethod::LaravelFormRequest => '/laravel-form-request',
             NullableRequestMethod::NonnullableStandard => '/nonnullable-standard',
             NullableRequestMethod::NonnullableFormRequest => '/nonnullable-form-request',
             NullableRequestMethod::NonnullableEnum => '/nonnullable-enum',
@@ -209,6 +306,9 @@ enum NullableRequestMethod implements SkirMethodReference
     case Data;
     case EnumValue;
     case FormRequest;
+    case DefaultDenyFormRequest;
+    case CustomDenyFormRequest;
+    case LaravelFormRequest;
     case NonnullableStandard;
     case NonnullableFormRequest;
     case NonnullableEnum;
@@ -241,6 +341,9 @@ enum NullableRequestMethod implements SkirMethodReference
             self::ContextOnly => 7,
             self::NonnullableEnum => 8,
             self::NonnullableData => 9,
+            self::DefaultDenyFormRequest => 10,
+            self::CustomDenyFormRequest => 11,
+            self::LaravelFormRequest => 12,
         };
     }
 }
@@ -294,11 +397,18 @@ final class NullableRequestStatusHydrations
 
 final class NullableGeneratedFormRequest extends SkirFormRequest
 {
+    /** @var array<string, mixed> */
+    public static array $authorizationContext = [];
+
     public static int $authorizations = 0;
 
     public static int $instances = 0;
 
+    public static int $preparations = 0;
+
     public static int $ruleResolutions = 0;
+
+    public static int $skirClassResolutions = 0;
 
     public function __construct()
     {
@@ -310,6 +420,13 @@ final class NullableGeneratedFormRequest extends SkirFormRequest
     public function authorize(): bool
     {
         self::$authorizations++;
+        self::$authorizationContext = [
+            'userId' => $this->user()?->getAuthIdentifier(),
+            'tenant' => $this->route('tenant'),
+            'trace' => $this->header('X-Skir-Trace'),
+            'session' => $this->session()->get('skir_session'),
+            'input' => $this->all(),
+        ];
 
         return true;
     }
@@ -322,10 +439,88 @@ final class NullableGeneratedFormRequest extends SkirFormRequest
         return ['name' => ['required', 'string']];
     }
 
-    /** @return class-string<NullableStandardRequest> */
-    public function skirClass(): string
+    protected function prepareForValidation(): void
+    {
+        self::$preparations++;
+    }
+
+    /** @return class-string<NullableFormPayload> */
+    protected function skirClass(): string
+    {
+        self::$skirClassResolutions++;
+
+        return NullableFormPayload::class;
+    }
+}
+
+final class NullableFormPayload
+{
+    public static int $hydrations = 0;
+
+    public function __construct(public string $name) {}
+
+    /** @param array{name: string} $payload */
+    public static function makeFromSkirPayload(array $payload): self
+    {
+        self::$hydrations++;
+
+        return new self($payload['name']);
+    }
+}
+
+final class DefaultDenyNullableFormRequest extends SkirFormRequest
+{
+    public static int $authorizations = 0;
+
+    public static int $ruleResolutions = 0;
+
+    public function authorize(): bool
+    {
+        self::$authorizations++;
+
+        return false;
+    }
+
+    public function rules(): array
+    {
+        self::$ruleResolutions++;
+
+        return [];
+    }
+
+    protected function skirClass(): string
     {
         return NullableStandardRequest::class;
+    }
+}
+
+final class CustomDenyNullableFormRequest extends SkirFormRequest
+{
+    public static int $failedAuthorizations = 0;
+
+    public function authorize(): bool
+    {
+        return false;
+    }
+
+    protected function failedAuthorization(): void
+    {
+        self::$failedAuthorizations++;
+
+        throw SkirServerException::invalidRequest('Custom nullable authorization failure.');
+    }
+
+    protected function skirClass(): string
+    {
+        return NullableStandardRequest::class;
+    }
+}
+
+final class NullableLaravelFormRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
     }
 }
 
@@ -357,7 +552,45 @@ final class NullableFormRequestController
 {
     public function __invoke(?NullableGeneratedFormRequest $request): array
     {
-        return ['received' => $request?->string('name')->toString()];
+        if ($request === null) {
+            return ['received' => null];
+        }
+
+        $payload = $request->skir();
+
+        return ['received' => $payload->name];
+    }
+}
+
+final class DefaultDenyNullableFormController
+{
+    public static int $invocations = 0;
+
+    public function __invoke(?DefaultDenyNullableFormRequest $request): array
+    {
+        self::$invocations++;
+
+        return ['received' => $request];
+    }
+}
+
+final class CustomDenyNullableFormController
+{
+    public static int $invocations = 0;
+
+    public function __invoke(?CustomDenyNullableFormRequest $request): array
+    {
+        self::$invocations++;
+
+        return ['received' => $request];
+    }
+}
+
+final class NullableLaravelFormController
+{
+    public function __invoke(?NullableLaravelFormRequest $request): array
+    {
+        return ['received' => $request];
     }
 }
 

@@ -10,6 +10,15 @@ use Skir\Server\Hydration\SkirPayloadHydrator;
 /** @template TSkir of object */
 abstract class SkirFormRequest extends FormRequest
 {
+    final public function authorizeResolved(): void
+    {
+        $this->prepareForValidation();
+
+        if (! $this->passesAuthorization()) {
+            $this->failedAuthorization();
+        }
+    }
+
     /** @return TSkir */
     final public function skir(): object
     {

@@ -28,6 +28,40 @@ final readonly class SkirFormRequestResolver
      */
     public function resolve(string $requestClass, array $decodedPayload, SkirContext $context): SkirFormRequest
     {
+        $resolvedRequest = $this->makeRequest($requestClass, $decodedPayload, $context);
+
+        try {
+            $resolvedRequest->validateResolved();
+        } catch (ValidationException $exception) {
+            throw SkirServerException::validationFailed($exception->errors());
+        } catch (AuthorizationException) {
+            throw SkirServerException::authorizationFailed();
+        }
+
+        return $resolvedRequest;
+    }
+
+    /** @param class-string<SkirFormRequest> $requestClass */
+    public function authorizeNull(string $requestClass, SkirContext $context): void
+    {
+        $resolvedRequest = $this->makeRequest($requestClass, [], $context);
+
+        try {
+            $resolvedRequest->authorizeResolved();
+        } catch (AuthorizationException) {
+            throw SkirServerException::authorizationFailed();
+        }
+    }
+
+    /**
+     * @template TRequest of SkirFormRequest
+     *
+     * @param  class-string<TRequest>  $requestClass
+     * @param  array<string, mixed>  $decodedPayload
+     * @return TRequest
+     */
+    private function makeRequest(string $requestClass, array $decodedPayload, SkirContext $context): SkirFormRequest
+    {
         $resolvedRequest = new $requestClass;
 
         $requestClass::createFrom($context->request, $resolvedRequest);
@@ -40,14 +74,6 @@ final readonly class SkirFormRequestResolver
         $resolvedRequest->files->replace([]);
         $resolvedRequest->setJson(new InputBag);
         $resolvedRequest->replace($decodedPayload);
-
-        try {
-            $resolvedRequest->validateResolved();
-        } catch (ValidationException $exception) {
-            throw SkirServerException::validationFailed($exception->errors());
-        } catch (AuthorizationException) {
-            throw SkirServerException::authorizationFailed();
-        }
 
         return $resolvedRequest;
     }

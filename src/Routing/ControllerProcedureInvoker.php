@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Skir\Server\Routing;
 
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Foundation\Http\FormRequest;
 use InvalidArgumentException;
 use ReflectionMethod;
 use ReflectionNamedType;
@@ -50,19 +51,33 @@ final readonly class ControllerProcedureInvoker
                 continue;
             }
 
-            if ($request === null && $type?->allowsNull()) {
-                $arguments[] = null;
-
-                continue;
-            }
-
             if ($this->isFormRequest($typeName)) {
+                if ($request === null && $type?->allowsNull()) {
+                    /** @var class-string<SkirFormRequest> $typeName */
+                    $this->formRequestResolver->authorizeNull($typeName, $context);
+                    $arguments[] = null;
+
+                    continue;
+                }
+
                 if (! is_array($request)) {
                     throw new InvalidArgumentException('Skir Form Requests require a decoded array/object payload.');
                 }
 
                 /** @var class-string<SkirFormRequest> $typeName */
                 $arguments[] = $this->formRequestResolver->resolve($typeName, $request, $context);
+
+                continue;
+            }
+
+            if ($this->isLaravelFormRequest($typeName)) {
+                throw new InvalidArgumentException(
+                    'Skir controller Form Requests must extend ['.SkirFormRequest::class.'].',
+                );
+            }
+
+            if ($request === null && $type?->allowsNull()) {
+                $arguments[] = null;
 
                 continue;
             }
@@ -93,6 +108,19 @@ final readonly class ControllerProcedureInvoker
         }
 
         return is_a($typeName, SkirFormRequest::class, true);
+    }
+
+    private function isLaravelFormRequest(?string $typeName): bool
+    {
+        if ($typeName === null) {
+            return false;
+        }
+
+        if (! class_exists($typeName)) {
+            return false;
+        }
+
+        return is_a($typeName, FormRequest::class, true);
     }
 
     private function normalizeResponse(mixed $response): mixed
