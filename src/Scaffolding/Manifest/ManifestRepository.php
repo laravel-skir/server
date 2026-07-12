@@ -40,18 +40,56 @@ final class ManifestRepository
 
         $methods = [];
         $modules = [];
+        $methodOrigins = [];
+        $moduleIndexes = [];
+        $moduleOrigins = [];
 
         foreach ($this->manifestPaths() as $path) {
             foreach ($this->readModules($path) as $module) {
+                $moduleIndex = $moduleIndexes[$module->name] ?? null;
+                $moduleMethods = [];
+
+                if ($moduleIndex !== null) {
+                    $existingModule = $modules[$moduleIndex];
+
+                    if ($existingModule->enumClass !== $module->enumClass) {
+                        throw SkirScaffoldingException::conflictingModule(
+                            module: $module->name,
+                            originalEnumClass: $existingModule->enumClass,
+                            originalPath: $moduleOrigins[$module->name],
+                            duplicateEnumClass: $module->enumClass,
+                            duplicatePath: $path,
+                        );
+                    }
+
+                    $moduleMethods = $existingModule->methods;
+                }
+
                 foreach ($module->methods as $method) {
                     if (array_key_exists($method->id(), $methods)) {
-                        throw SkirScaffoldingException::duplicateMethod($path, $method->id());
+                        throw SkirScaffoldingException::duplicateMethod(
+                            methodId: $method->id(),
+                            originalPath: $methodOrigins[$method->id()],
+                            duplicatePath: $path,
+                        );
                     }
 
                     $methods[$method->id()] = $method;
+                    $methodOrigins[$method->id()] = $path;
+                    $moduleMethods[] = $method;
                 }
 
-                $modules[] = $module;
+                $mergedModule = new SkirModuleDefinition($module->name, $module->enumClass, $moduleMethods);
+
+                if ($moduleIndex !== null) {
+                    $modules[$moduleIndex] = $mergedModule;
+
+                    continue;
+                }
+
+                $moduleIndexes[$module->name] = count($modules);
+                $moduleOrigins[$module->name] = $path;
+                $modules[] = $mergedModule;
             }
         }
 
@@ -72,9 +110,13 @@ final class ManifestRepository
             throw SkirScaffoldingException::invalidField('configuration', 'manifests', 'a list of file paths');
         }
 
-        foreach ($paths as $path) {
+        foreach ($paths as $index => $path) {
             if (! is_string($path)) {
-                throw SkirScaffoldingException::invalidField('configuration', 'manifests', 'a list of file paths');
+                throw SkirScaffoldingException::invalidConfigurationField("manifests.{$index}", 'a non-blank file path');
+            }
+
+            if (trim($path) === '') {
+                throw SkirScaffoldingException::invalidConfigurationField("manifests.{$index}", 'a non-blank file path');
             }
         }
 
@@ -84,6 +126,10 @@ final class ManifestRepository
     /** @return list<SkirModuleDefinition> */
     private function readModules(string $path): array
     {
+        if (! is_file($path)) {
+            throw SkirScaffoldingException::unreadableManifest($path, $this->generatorCommand());
+        }
+
         if (! is_readable($path)) {
             throw SkirScaffoldingException::unreadableManifest($path, $this->generatorCommand());
         }
@@ -168,6 +214,10 @@ final class ManifestRepository
             throw SkirScaffoldingException::invalidField($path, $field, 'a string');
         }
 
+        if (trim($value) === '') {
+            throw SkirScaffoldingException::invalidField($path, $field, 'a non-blank string');
+        }
+
         return $value;
     }
 
@@ -201,6 +251,10 @@ final class ManifestRepository
 
         if (! is_string($value)) {
             throw SkirScaffoldingException::invalidField($path, $field, 'a string or null');
+        }
+
+        if (trim($value) === '') {
+            throw SkirScaffoldingException::invalidField($path, $field, 'a non-blank string or null');
         }
 
         return $value;

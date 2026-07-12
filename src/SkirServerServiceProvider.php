@@ -17,7 +17,18 @@ final class SkirServerServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__.'/../config/skir-server.php', 'skir-server');
+        $configurationPath = __DIR__.'/../config/skir-server.php';
+
+        $this->mergeConfigFrom($configurationPath, 'skir-server');
+
+        $defaults = require $configurationPath;
+        $configuredScaffolding = config('skir-server.scaffolding', []);
+        $configuredScaffolding = is_array($configuredScaffolding) ? $configuredScaffolding : [];
+
+        config()->set('skir-server.scaffolding', array_replace(
+            $defaults['scaffolding'],
+            $configuredScaffolding,
+        ));
 
         $this->app->singleton(ProcedureRegistry::class);
         $this->app->singleton(SkirCodec::class, DenseJsonCodec::class);

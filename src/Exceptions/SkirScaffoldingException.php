@@ -36,8 +36,27 @@ final class SkirScaffoldingException extends RuntimeException
         return new self("Skir manifest [{$path}] has an invalid [{$field}] field; expected {$expected}.");
     }
 
-    public static function duplicateMethod(string $path, string $methodId): self
+    public static function invalidConfigurationField(string $field, string $expected): self
     {
-        return new self("Duplicate Skir method [{$methodId}] found in manifest [{$path}].");
+        return new self("Skir manifest configuration has an invalid [{$field}] field; expected {$expected}.");
+    }
+
+    public static function duplicateMethod(string $methodId, string $originalPath, string $duplicatePath): self
+    {
+        return new self(
+            "Duplicate Skir method [{$methodId}] found in manifest [{$duplicatePath}]; first declared in manifest [{$originalPath}].",
+        );
+    }
+
+    public static function conflictingModule(
+        string $module,
+        string $originalEnumClass,
+        string $originalPath,
+        string $duplicateEnumClass,
+        string $duplicatePath,
+    ): self {
+        return new self(
+            "Skir module [{$module}] is declared as [{$originalEnumClass}] in manifest [{$originalPath}] and [{$duplicateEnumClass}] in manifest [{$duplicatePath}].",
+        );
     }
 }

@@ -94,6 +94,71 @@ final class ManifestRepositoryTest extends TestCase
         ));
     }
 
+    public function test_it_merges_repeated_modules_with_the_same_enum_within_one_manifest(): void
+    {
+        $path = $this->writeManifest('manifest.json', $this->manifest([
+            $this->module('Admin', 'App\\Skir\\AdminMethod', [
+                $this->method('GetUser', 'GetUser', 'getUser'),
+            ]),
+            $this->module('PublicApi', 'App\\Skir\\PublicApiMethod', [
+                $this->method('Health', 'Health', 'health'),
+            ]),
+            $this->module('Admin', 'App\\Skir\\AdminMethod', [
+                $this->method('DeleteUser', 'DeleteUser', 'deleteUser'),
+            ]),
+        ]));
+        config()->set('skir-server.manifests', [$path]);
+
+        $modules = app(ManifestRepository::class)->modules();
+
+        self::assertSame(['Admin', 'PublicApi'], array_column($modules, 'name'));
+        self::assertSame(
+            ['Admin.GetUser', 'Admin.DeleteUser'],
+            array_map(static fn (SkirMethodDefinition $method): string => $method->id(), $modules[0]->methods),
+        );
+    }
+
+    public function test_it_merges_repeated_modules_with_the_same_enum_across_manifests(): void
+    {
+        $firstPath = $this->writeManifest('first.json', $this->manifest([
+            $this->module('Admin', 'App\\Skir\\AdminMethod', [
+                $this->method('GetUser', 'GetUser', 'getUser'),
+            ]),
+        ]));
+        $secondPath = $this->writeManifest('second.json', $this->manifest([
+            $this->module('Admin', 'App\\Skir\\AdminMethod', [
+                $this->method('DeleteUser', 'DeleteUser', 'deleteUser'),
+            ]),
+        ]));
+        config()->set('skir-server.manifests', [$firstPath, $secondPath]);
+
+        $modules = app(ManifestRepository::class)->modules();
+
+        self::assertCount(1, $modules);
+        self::assertSame(
+            ['Admin.GetUser', 'Admin.DeleteUser'],
+            array_map(static fn (SkirMethodDefinition $method): string => $method->id(), $modules[0]->methods),
+        );
+    }
+
+    public function test_it_rejects_repeated_modules_with_different_enums(): void
+    {
+        $firstPath = $this->writeManifest('first.json', $this->manifest([
+            $this->module('Admin', 'App\\Skir\\AdminMethod', []),
+        ]));
+        $secondPath = $this->writeManifest('second.json', $this->manifest([
+            $this->module('Admin', 'Other\\AdminMethod', []),
+        ]));
+        config()->set('skir-server.manifests', [$firstPath, $secondPath]);
+
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage(
+            "Skir module [Admin] is declared as [App\\Skir\\AdminMethod] in manifest [{$firstPath}] and [Other\\AdminMethod] in manifest [{$secondPath}].",
+        );
+
+        app(ManifestRepository::class)->modules();
+    }
+
     public function test_it_accepts_a_scalar_request_type_with_no_request_class(): void
     {
         $path = $this->writeManifest('manifest.json', $this->manifest([
@@ -142,14 +207,46 @@ final class ManifestRepositoryTest extends TestCase
             $this->module('Admin', 'App\\Skir\\AdminMethod', [$this->method('GetUser', 'GetUser', 'getUser')]),
         ]));
         $secondPath = $this->writeManifest('second.json', $this->manifest([
-            $this->module('Admin', 'Other\\AdminMethod', [$this->method('GetUser', 'GetUser', 'getUser')]),
+            $this->module('Admin', 'App\\Skir\\AdminMethod', [$this->method('GetUser', 'GetUser', 'getUser')]),
         ]));
         config()->set('skir-server.manifests', [$firstPath, $secondPath]);
 
         $this->expectException(SkirScaffoldingException::class);
-        $this->expectExceptionMessage("Duplicate Skir method [Admin.GetUser] found in manifest [{$secondPath}].");
+        $this->expectExceptionMessage(
+            "Duplicate Skir method [Admin.GetUser] found in manifest [{$secondPath}]; first declared in manifest [{$firstPath}].",
+        );
 
         app(ManifestRepository::class)->methods();
+    }
+
+    #[DataProvider('blankRequiredStringProvider')]
+    public function test_it_rejects_blank_required_strings(string $field): void
+    {
+        $manifest = $this->manifest([
+            $this->module('Admin', 'App\\Skir\\AdminMethod', [self::validMethod()]),
+        ]);
+        $this->setManifestField($manifest, $field, " \t ");
+        $path = $this->writeManifest('manifest.json', $manifest);
+        config()->set('skir-server.manifests', [$path]);
+
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage("Skir manifest [{$path}] has an invalid [{$field}] field");
+
+        app(ManifestRepository::class)->methods();
+    }
+
+    public static function blankRequiredStringProvider(): iterable
+    {
+        yield 'generator' => ['generator'];
+        yield 'module name' => ['modules.0.name'];
+        yield 'method enum' => ['modules.0.methodEnum'];
+        yield 'method name' => ['modules.0.methods.0.name'];
+        yield 'enum case' => ['modules.0.methods.0.enumCase'];
+        yield 'PHP method' => ['modules.0.methods.0.phpMethod'];
+        yield 'request type' => ['modules.0.methods.0.requestType'];
+        yield 'request class' => ['modules.0.methods.0.requestClass'];
+        yield 'response type' => ['modules.0.methods.0.responseType'];
+        yield 'response class' => ['modules.0.methods.0.responseClass'];
     }
 
     #[DataProvider('invalidManifestProvider')]
@@ -245,6 +342,28 @@ final class ManifestRepositoryTest extends TestCase
         app(ManifestRepository::class)->methods();
     }
 
+    public function test_it_rejects_a_directory_manifest_path(): void
+    {
+        config()->set('skir-server.manifests', [$this->temporaryDirectory]);
+
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage(
+            "Skir manifest [{$this->temporaryDirectory}] does not exist or is not readable. Run [npx skir gen] to generate it.",
+        );
+
+        app(ManifestRepository::class)->methods();
+    }
+
+    public function test_it_rejects_a_blank_configured_manifest_path(): void
+    {
+        config()->set('skir-server.manifests', ['  ']);
+
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage('Skir manifest configuration has an invalid [manifests.0] field; expected a non-blank file path.');
+
+        app(ManifestRepository::class)->methods();
+    }
+
     public function test_the_service_provider_registers_manifest_configuration_and_repository(): void
     {
         self::assertSame([base_path('app/Skir/skirout/skir-server-manifest.json')], config('skir-server.manifests'));
@@ -258,6 +377,25 @@ final class ManifestRepositoryTest extends TestCase
         $publishedPaths = ServiceProvider::pathsToPublish(SkirServerServiceProvider::class, 'skir-server-config');
 
         self::assertContains(config_path('skir-server.php'), $publishedPaths);
+    }
+
+    public function test_the_service_provider_preserves_scaffolding_defaults_with_a_partial_override(): void
+    {
+        config()->set('skir-server', [
+            'manifests' => ['/custom/manifest.json'],
+            'scaffolding' => [
+                'controller_style' => 'method',
+            ],
+        ]);
+
+        (new SkirServerServiceProvider($this->app))->register();
+
+        self::assertSame(['/custom/manifest.json'], config('skir-server.manifests'));
+        self::assertSame('method', config('skir-server.scaffolding.controller_style'));
+        self::assertSame('App\\Skir', config('skir-server.scaffolding.controller_namespace'));
+        self::assertSame('App\\Http\\Requests\\Skir', config('skir-server.scaffolding.request_namespace'));
+        self::assertTrue(config('skir-server.scaffolding.form_requests'));
+        self::assertSame(['npx', 'skir', 'gen'], config('skir-server.generator_command'));
     }
 
     /** @param array<int, array<string, mixed>> $modules */
@@ -316,6 +454,18 @@ final class ManifestRepositoryTest extends TestCase
             'responseType' => 'void',
             'responseClass' => null,
         ];
+    }
+
+    /** @param array<string, mixed> $manifest */
+    private function setManifestField(array &$manifest, string $field, mixed $value): void
+    {
+        $target = &$manifest;
+
+        foreach (explode('.', $field) as $segment) {
+            $target = &$target[$segment];
+        }
+
+        $target = $value;
     }
 
     private function writeManifest(string $name, array|string $contents): string
