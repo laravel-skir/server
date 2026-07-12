@@ -49,8 +49,11 @@ final class FormRequestScaffolder
 
     public function scaffold(SkirMethodDefinition $method, ?string $className = null): string
     {
-        $rendered = $this->render($method, $className);
+        return $this->publish($this->render($method, $className));
+    }
 
+    public function publish(RenderedFile $rendered): string
+    {
         if ($this->filesystem->exists($rendered->destinationPath)) {
             throw SkirScaffoldingException::existingFile($rendered->destinationPath);
         }
@@ -67,7 +70,11 @@ final class FormRequestScaffolder
         try {
             $this->filesystem->write($temporaryPath, $rendered->source);
             $this->filesystem->chmod($temporaryPath, 0666 & ~umask());
-            $this->publisher->publish($temporaryPath, $rendered->destinationPath);
+            $this->publisher->publish(
+                $temporaryPath,
+                $rendered->destinationPath,
+                SkirScaffoldingException::existingFile(...),
+            );
             $published = true;
         } finally {
             try {

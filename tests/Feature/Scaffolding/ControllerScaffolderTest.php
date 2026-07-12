@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Skir\Server\Tests\Feature\Scaffolding;
 
 use PHPUnit\Framework\Attributes\Test;
+use RuntimeException;
 use Skir\Server\Exceptions\SkirScaffoldingException;
 use Skir\Server\Scaffolding\AtomicFilePublisher;
 use Skir\Server\Scaffolding\ControllerScaffolder;
@@ -227,6 +228,83 @@ final class ControllerScaffolderTest extends TestCase
     }
 
     #[Test]
+    public function it_publishes_each_request_from_its_exact_preflight_render(): void
+    {
+        $formRequestStubReads = 0;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use (&$formRequestStubReads): void {
+                if ($operation !== 'read') {
+                    return;
+                }
+
+                if (! str_ends_with($path, 'skir-form-request.stub')) {
+                    return;
+                }
+
+                $formRequestStubReads++;
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $formRequestScaffolder = new FormRequestScaffolder($publisher, $filesystem);
+        $scaffolder = new ControllerScaffolder($publisher, $filesystem, $formRequestScaffolder);
+
+        $scaffolder->scaffold(new ScaffoldingSelection(
+            [$this->method()],
+            ControllerStyle::Module,
+            null,
+            true,
+        ));
+
+        self::assertSame(1, $formRequestStubReads);
+    }
+
+    #[Test]
+    public function a_later_request_render_failure_leaves_all_preflighted_output_unpublished(): void
+    {
+        $formRequestStubReads = 0;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use (&$formRequestStubReads): void {
+                if ($operation !== 'read') {
+                    return;
+                }
+
+                if (! str_ends_with($path, 'skir-form-request.stub')) {
+                    return;
+                }
+
+                $formRequestStubReads++;
+
+                if ($formRequestStubReads === 2) {
+                    throw new RuntimeException('Simulated later request render failure.');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $formRequestScaffolder = new FormRequestScaffolder($publisher, $filesystem);
+        $scaffolder = new ControllerScaffolder($publisher, $filesystem, $formRequestScaffolder);
+        $selection = new ScaffoldingSelection([
+            $this->method(),
+            $this->method(
+                name: 'UpdateUser',
+                enumCase: 'UpdateUser',
+                phpMethod: 'updateUser',
+                requestType: 'UpdateUserRequest',
+                requestClass: 'App\\Skir\\Dto\\UpdateUserRequest',
+            ),
+        ], ControllerStyle::Module, null, true);
+
+        try {
+            $scaffolder->scaffold($selection);
+            self::fail('A later request render failure should abort preflight.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('Simulated later request render failure.', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php');
+        self::assertFileDoesNotExist($this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php');
+    }
+
+    #[Test]
     public function scalar_and_union_direct_types_compile_but_scalar_form_requests_fail_without_writes(): void
     {
         $direct = $this->method(
@@ -430,6 +508,7 @@ final class ControllerScaffolderTest extends TestCase
             $filesystem,
             app(FormRequestScaffolder::class),
         );
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
 
         try {
             $scaffolder->scaffold(new ScaffoldingSelection(
@@ -440,10 +519,12 @@ final class ControllerScaffolderTest extends TestCase
             ));
             self::fail('A publication race should fail.');
         } catch (SkirScaffoldingException $exception) {
-            self::assertStringContainsString('already exists', $exception->getMessage());
+            self::assertSame(
+                "Skir controller [{$controllerPath}] already exists and was not modified.",
+                $exception->getMessage(),
+            );
         }
 
-        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
         self::assertSame('<?php // competing writer', file_get_contents($controllerPath));
         self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
     }

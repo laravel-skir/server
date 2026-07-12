@@ -46,9 +46,8 @@ final class ControllerScaffolder
 
         $createdPaths = [];
 
-        foreach ($requestsToCreate as $methodId => $renderedRequest) {
-            $method = $this->methodById($selection, $methodId);
-            $createdPaths[] = $this->formRequestScaffolder->scaffold($method);
+        foreach ($requestsToCreate as $renderedRequest) {
+            $createdPaths[] = $this->formRequestScaffolder->publish($renderedRequest);
         }
 
         foreach ($renderedControllers as $renderedController) {
@@ -468,7 +467,11 @@ PHP;
         try {
             $this->filesystem->write($temporaryPath, $rendered->source);
             $this->filesystem->chmod($temporaryPath, 0666 & ~umask());
-            $this->publisher->publish($temporaryPath, $rendered->destinationPath);
+            $this->publisher->publish(
+                $temporaryPath,
+                $rendered->destinationPath,
+                SkirScaffoldingException::existingController(...),
+            );
             $published = true;
         } finally {
             try {
@@ -485,16 +488,5 @@ PHP;
                 throw $exception;
             }
         }
-    }
-
-    private function methodById(ScaffoldingSelection $selection, string $methodId): SkirMethodDefinition
-    {
-        foreach ($selection->methods as $method) {
-            if ($method->id() === $methodId) {
-                return $method;
-            }
-        }
-
-        throw SkirScaffoldingException::unknownMethod($methodId);
     }
 }

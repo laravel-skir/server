@@ -296,7 +296,10 @@ PHP."\n", file_get_contents($expectedPath));
             app(FormRequestScaffolder::class)->scaffold($this->definition());
             self::fail('Publication should refuse a destination created by another process.');
         } catch (SkirScaffoldingException $exception) {
-            self::assertStringContainsString('already exists', $exception->getMessage());
+            self::assertSame(
+                "Form request [{$destinationPath}] already exists and was not modified.",
+                $exception->getMessage(),
+            );
         }
 
         self::assertSame('race winner bytes', file_get_contents($destinationPath));
@@ -332,7 +335,11 @@ PHP."\n", file_get_contents($expectedPath));
         $destinationPath = $directory.'/PublishedRequest.php';
         file_put_contents($temporaryPath, 'published bytes');
 
-        app(AtomicFilePublisher::class)->publish($temporaryPath, $destinationPath);
+        app(AtomicFilePublisher::class)->publish(
+            $temporaryPath,
+            $destinationPath,
+            SkirScaffoldingException::existingFile(...),
+        );
 
         self::assertSame('published bytes', file_get_contents($destinationPath));
         self::assertFileExists($temporaryPath);
