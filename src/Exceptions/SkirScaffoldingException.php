@@ -119,9 +119,9 @@ final class SkirScaffoldingException extends RuntimeException
         );
     }
 
-    public static function importCollision(string $className): self
+    public static function importCollision(string $shortName): self
     {
-        return new self("Generated class name [{$className}] collides with an imported class short name.");
+        return new self("Imported short name [{$shortName}] is declared more than once in the generated form request.");
     }
 
     public static function namespaceOutsideApplication(string $namespace, string $applicationNamespace): self
@@ -140,6 +140,17 @@ final class SkirScaffoldingException extends RuntimeException
 
         return new self(
             "Filesystem operation [{$operation}] failed for [{$path}]{$details}.",
+            previous: $exception,
+        );
+    }
+
+    public static function cleanupFailedAfterPublication(
+        string $destinationPath,
+        string $temporaryPath,
+        Throwable $exception,
+    ): self {
+        return new self(
+            "Form request [{$destinationPath}] was created, but temporary file cleanup failed; remove leftover [{$temporaryPath}] manually: {$exception->getMessage()}",
             previous: $exception,
         );
     }

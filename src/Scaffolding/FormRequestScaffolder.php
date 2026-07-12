@@ -62,13 +62,27 @@ final class FormRequestScaffolder
         }
 
         $temporaryPath = $this->filesystem->temporaryFile($directory);
+        $published = false;
 
         try {
             $this->filesystem->write($temporaryPath, $rendered->source);
             $this->filesystem->chmod($temporaryPath, 0666 & ~umask());
             $this->publisher->publish($temporaryPath, $rendered->destinationPath);
+            $published = true;
         } finally {
-            $this->filesystem->remove($temporaryPath);
+            try {
+                $this->filesystem->remove($temporaryPath);
+            } catch (SkirScaffoldingException $exception) {
+                if ($published) {
+                    throw SkirScaffoldingException::cleanupFailedAfterPublication(
+                        $rendered->destinationPath,
+                        $temporaryPath,
+                        $exception,
+                    );
+                }
+
+                throw $exception;
+            }
         }
 
         return $rendered->destinationPath;
@@ -167,10 +181,16 @@ final class FormRequestScaffolder
     private function validateImports(string $className, string $requestClassName): void
     {
         $shortNames = [$className, $requestClassName, 'ValidationRule', 'SkirFormRequest'];
-        $normalizedShortNames = array_map(strtolower(...), $shortNames);
+        $seenShortNames = [];
 
-        if (count(array_unique($normalizedShortNames)) !== count($normalizedShortNames)) {
-            throw SkirScaffoldingException::importCollision($className);
+        foreach ($shortNames as $shortName) {
+            $normalizedShortName = strtolower($shortName);
+
+            if (isset($seenShortNames[$normalizedShortName])) {
+                throw SkirScaffoldingException::importCollision($shortName);
+            }
+
+            $seenShortNames[$normalizedShortName] = true;
         }
     }
 

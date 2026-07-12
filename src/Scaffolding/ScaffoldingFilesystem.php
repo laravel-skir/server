@@ -37,11 +37,19 @@ final class ScaffoldingFilesystem
 
     public function makeDirectory(string $path): void
     {
-        $created = $this->run(
-            'makeDirectory',
-            $path,
-            static fn (): bool => mkdir($path, 0777, true),
-        );
+        try {
+            $created = $this->run(
+                'makeDirectory',
+                $path,
+                static fn (): bool => mkdir($path, 0777, true),
+            );
+        } catch (SkirScaffoldingException $exception) {
+            if ($this->isDirectory($path)) {
+                return;
+            }
+
+            throw $exception;
+        }
 
         if ($created !== true && ! is_dir($path)) {
             throw SkirScaffoldingException::filesystemOperationFailed('makeDirectory', $path);
@@ -95,7 +103,15 @@ final class ScaffoldingFilesystem
             return;
         }
 
-        $removed = $this->run('remove', $path, static fn (): bool => unlink($path));
+        try {
+            $removed = $this->run('remove', $path, static fn (): bool => unlink($path));
+        } catch (SkirScaffoldingException $exception) {
+            if (! $this->exists($path)) {
+                return;
+            }
+
+            throw $exception;
+        }
 
         if ($removed !== true) {
             throw SkirScaffoldingException::filesystemOperationFailed('remove', $path);

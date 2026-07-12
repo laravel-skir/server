@@ -17,19 +17,15 @@ final class AtomicFilePublisher
 
     public function publish(string $temporaryPath, string $destinationPath): void
     {
-        try {
-            if ($this->link($temporaryPath, $destinationPath)) {
-                return;
-            }
-
-            if ($this->filesystem->exists($destinationPath)) {
-                throw SkirScaffoldingException::existingFile($destinationPath);
-            }
-
-            throw SkirScaffoldingException::atomicPublicationUnavailable($destinationPath);
-        } finally {
-            $this->filesystem->remove($temporaryPath);
+        if ($this->link($temporaryPath, $destinationPath)) {
+            return;
         }
+
+        if ($this->filesystem->exists($destinationPath)) {
+            throw SkirScaffoldingException::existingFile($destinationPath);
+        }
+
+        throw SkirScaffoldingException::atomicPublicationUnavailable($destinationPath);
     }
 
     private function link(string $temporaryPath, string $destinationPath): bool
