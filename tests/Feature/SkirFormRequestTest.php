@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Skir\Server\Tests\Feature;
 
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\Test;
 use Skir\Runtime\Field;
@@ -226,6 +228,55 @@ final class SkirFormRequestTest extends TestCase
             ]);
 
         $this->assertSame(0, UnauthorizedFormController::$invocations);
+    }
+
+    #[Test]
+    public function it_preserves_validation_exceptions_thrown_by_controller_business_logic(): void
+    {
+        Route::skirRpc('/business-validation-rpc', [
+            Skir::method(FormRequestSkirMethod::RenameUser, BusinessValidationController::class),
+        ], SkirCodecs::standardJson());
+
+        $this
+            ->postJson('/business-validation-rpc', [
+                'method' => 'RenameUser',
+                'request' => [
+                    'id' => 42,
+                    'name' => 'Maxim',
+                    'metadata' => 'preserved',
+                ],
+            ])
+            ->assertStatus(409)
+            ->assertExactJson([
+                'message' => 'The business field is invalid.',
+                'errors' => [
+                    'business' => [
+                        'The business field is invalid.',
+                    ],
+                ],
+            ]);
+    }
+
+    #[Test]
+    public function it_preserves_not_found_authorization_exceptions_thrown_by_controller_business_logic(): void
+    {
+        Route::skirRpc('/business-authorization-rpc', [
+            Skir::method(FormRequestSkirMethod::RenameUser, BusinessAuthorizationController::class),
+        ], SkirCodecs::standardJson());
+
+        $this
+            ->postJson('/business-authorization-rpc', [
+                'method' => 'RenameUser',
+                'request' => [
+                    'id' => 42,
+                    'name' => 'Maxim',
+                    'metadata' => 'preserved',
+                ],
+            ])
+            ->assertNotFound()
+            ->assertExactJson([
+                'message' => 'Not Found',
+            ]);
     }
 
     #[Test]
@@ -487,6 +538,24 @@ final class UnauthorizedFormController
         $payload = $request->skir();
 
         return $payload;
+    }
+}
+
+final class BusinessValidationController
+{
+    public function __invoke(RenameUserSkirRequest $request): PreparedUserPayload
+    {
+        throw ValidationException::withMessages([
+            'business' => ['The business field is invalid.'],
+        ])->status(409);
+    }
+}
+
+final class BusinessAuthorizationController
+{
+    public function __invoke(RenameUserSkirRequest $request): PreparedUserPayload
+    {
+        throw (new AuthorizationException)->asNotFound();
     }
 }
 

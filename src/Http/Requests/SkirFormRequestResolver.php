@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Skir\Server\Http\Requests;
 
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Routing\Redirector;
+use Illuminate\Validation\ValidationException;
+use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\SkirContext;
 use Symfony\Component\HttpFoundation\InputBag;
 
@@ -37,7 +40,14 @@ final readonly class SkirFormRequestResolver
         $resolvedRequest->files->replace([]);
         $resolvedRequest->setJson(new InputBag);
         $resolvedRequest->replace($decodedPayload);
-        $resolvedRequest->validateResolved();
+
+        try {
+            $resolvedRequest->validateResolved();
+        } catch (ValidationException $exception) {
+            throw SkirServerException::validationFailed($exception->errors());
+        } catch (AuthorizationException) {
+            throw SkirServerException::authorizationFailed();
+        }
 
         return $resolvedRequest;
     }
