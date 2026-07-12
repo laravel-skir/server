@@ -107,6 +107,28 @@ final class SkirScaffoldingException extends RuntimeException
         );
     }
 
+    public static function temporaryCleanupFailedAfterRollback(
+        string $destinationPath,
+        string $temporaryPath,
+        Throwable $cleanup,
+    ): self {
+        return new self(
+            "Scaffolding mutation was rolled back successfully for [{$destinationPath}], but temporary file [{$temporaryPath}] could not be removed: {$cleanup->getMessage()}",
+            previous: $cleanup,
+        );
+    }
+
+    public static function failureWithTemporaryCleanup(
+        Throwable $primary,
+        string $temporaryPath,
+        Throwable $cleanup,
+    ): self {
+        return new self(
+            "{$primary->getMessage()} Additionally, temporary file [{$temporaryPath}] could not be removed: {$cleanup->getMessage()}",
+            previous: $primary,
+        );
+    }
+
     public static function invalidControllerNamespace(mixed $namespace): self
     {
         $displayNamespace = is_scalar($namespace) ? (string) $namespace : get_debug_type($namespace);

@@ -577,6 +577,8 @@ final class ControllerScaffolder
         $temporaryPath = $this->filesystem->temporaryFile($directory);
         $published = false;
         $staged = null;
+        $primaryException = null;
+        $mutationUndone = false;
 
         try {
             $this->filesystem->write($temporaryPath, $rendered->source);
@@ -604,45 +606,57 @@ final class ControllerScaffolder
                 throw SkirScaffoldingException::rollbackArtifactChanged($rendered->destinationPath);
             }
         } catch (Throwable $exception) {
+            $primaryException = $exception;
+
             if ($published && $staged !== null) {
                 try {
                     $this->undoUnjournaledCreation($rendered->destinationPath, $staged);
+                    $mutationUndone = true;
                 } catch (Throwable $rollbackException) {
-                    throw SkirScaffoldingException::transactionRollbackFailed($exception, $rollbackException);
+                    $primaryException = SkirScaffoldingException::transactionRollbackFailed(
+                        $exception,
+                        $rollbackException,
+                    );
+                }
+            }
+        }
+
+        try {
+            $this->filesystem->remove($temporaryPath);
+        } catch (Throwable $cleanupException) {
+            if ($primaryException === null && $published && $staged !== null && ! $mutationUndone) {
+                try {
+                    $this->undoUnjournaledCreation($rendered->destinationPath, $staged);
+                    $mutationUndone = true;
+                } catch (Throwable $rollbackException) {
+                    $primaryException = SkirScaffoldingException::transactionRollbackFailed(
+                        $cleanupException,
+                        $rollbackException,
+                    );
                 }
             }
 
-            throw $exception;
-        } finally {
-            try {
-                $this->filesystem->remove($temporaryPath);
-            } catch (SkirScaffoldingException $exception) {
-                if ($published && $staged !== null) {
-                    try {
-                        $this->undoUnjournaledCreation($rendered->destinationPath, $staged);
-                        $this->filesystem->remove($temporaryPath);
-                    } catch (Throwable $rollbackException) {
-                        throw SkirScaffoldingException::transactionRollbackFailed(
-                            $exception,
-                            $rollbackException,
-                        );
-                    }
-
-                    throw ($request
-                        ? SkirScaffoldingException::cleanupFailedAfterPublication(
-                            $rendered->destinationPath,
-                            $temporaryPath,
-                            $exception,
-                        )
-                        : SkirScaffoldingException::cleanupFailedAfterControllerPublication(
-                            $rendered->destinationPath,
-                            $temporaryPath,
-                            $exception,
-                        ));
-                }
-
-                throw $exception;
+            if ($primaryException !== null) {
+                throw SkirScaffoldingException::failureWithTemporaryCleanup(
+                    $primaryException,
+                    $temporaryPath,
+                    $cleanupException,
+                );
             }
+
+            if ($mutationUndone) {
+                throw SkirScaffoldingException::temporaryCleanupFailedAfterRollback(
+                    $rendered->destinationPath,
+                    $temporaryPath,
+                    $cleanupException,
+                );
+            }
+
+            throw $cleanupException;
+        }
+
+        if ($primaryException !== null) {
+            throw $primaryException;
         }
 
         return $staged;
@@ -686,6 +700,9 @@ final class ControllerScaffolder
         $staged = null;
         $displaced = false;
         $published = false;
+        $replacement = null;
+        $primaryException = null;
+        $mutationUndone = false;
 
         try {
             $this->filesystem->write($temporaryPath, $rendered->source);
@@ -717,12 +734,14 @@ final class ControllerScaffolder
                 throw SkirScaffoldingException::rollbackArtifactChanged($rendered->destinationPath);
             }
 
-            return new ControllerReplacement(
+            $replacement = new ControllerReplacement(
                 $rendered->destinationPath,
                 $backupPath,
                 $staged,
             );
         } catch (Throwable $exception) {
+            $primaryException = $exception;
+
             if ($displaced && $backupPath !== null) {
                 try {
                     if ($published && $staged !== null) {
@@ -730,35 +749,59 @@ final class ControllerScaffolder
                     }
 
                     $this->restoreDisplacedOriginal($backupPath, $rendered->destinationPath);
+                    $mutationUndone = true;
                 } catch (Throwable $rollbackException) {
-                    throw SkirScaffoldingException::transactionRollbackFailed($exception, $rollbackException);
+                    $primaryException = SkirScaffoldingException::transactionRollbackFailed(
+                        $exception,
+                        $rollbackException,
+                    );
                 }
-            }
-
-            throw $exception;
-        } finally {
-            try {
-                $this->filesystem->remove($temporaryPath);
-            } catch (Throwable $cleanupException) {
-                if ($published && $backupPath !== null && $staged !== null) {
-                    try {
-                        $this->rollbackReplacement(new ControllerReplacement(
-                            $rendered->destinationPath,
-                            $backupPath,
-                            $staged,
-                        ));
-                        $this->filesystem->remove($temporaryPath);
-                    } catch (Throwable $rollbackException) {
-                        throw SkirScaffoldingException::transactionRollbackFailed(
-                            $cleanupException,
-                            $rollbackException,
-                        );
-                    }
-                }
-
-                throw $cleanupException;
             }
         }
+
+        try {
+            $this->filesystem->remove($temporaryPath);
+        } catch (Throwable $cleanupException) {
+            if ($primaryException === null && $replacement !== null && ! $mutationUndone) {
+                try {
+                    $this->rollbackReplacement($replacement);
+                    $mutationUndone = true;
+                } catch (Throwable $rollbackException) {
+                    $primaryException = SkirScaffoldingException::transactionRollbackFailed(
+                        $cleanupException,
+                        $rollbackException,
+                    );
+                }
+            }
+
+            if ($primaryException !== null) {
+                throw SkirScaffoldingException::failureWithTemporaryCleanup(
+                    $primaryException,
+                    $temporaryPath,
+                    $cleanupException,
+                );
+            }
+
+            if ($mutationUndone) {
+                throw SkirScaffoldingException::temporaryCleanupFailedAfterRollback(
+                    $rendered->destinationPath,
+                    $temporaryPath,
+                    $cleanupException,
+                );
+            }
+
+            throw $cleanupException;
+        }
+
+        if ($primaryException !== null) {
+            throw $primaryException;
+        }
+
+        if ($replacement === null) {
+            throw SkirScaffoldingException::rollbackArtifactChanged($rendered->destinationPath);
+        }
+
+        return $replacement;
     }
 
     private function rollbackReplacement(ControllerReplacement $replacement): void

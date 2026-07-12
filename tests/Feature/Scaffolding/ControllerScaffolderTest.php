@@ -1757,7 +1757,170 @@ PHP;
 
         self::assertTrue($failedCleanup);
         self::assertSame($original, file_get_contents($controllerPath));
-        self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
+        self::assertCount(1, glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function persistent_creation_temp_cleanup_failure_reports_leftover_after_successful_undo(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $failingTemp = null;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use (&$failingTemp): void {
+                if ($operation !== 'remove' || ! is_file($path) || ! str_contains($path, '/app/Skir/')) {
+                    return;
+                }
+
+                $contents = file_get_contents($path);
+
+                if ($failingTemp === null && is_string($contents) && str_contains($contents, 'SkirMethod')) {
+                    $failingTemp = $path;
+                }
+
+                if ($path === $failingTemp) {
+                    throw new RuntimeException('Persistent creation temp cleanup failure.');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('Persistent cleanup should be reported.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('mutation was rolled back successfully', $exception->getMessage());
+            self::assertStringNotContainsString('could not be rolled back safely', $exception->getMessage());
+            self::assertStringContainsString((string) $failingTemp, $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($controllerPath);
+        self::assertIsString($failingTemp);
+        self::assertFileExists($failingTemp);
+    }
+
+    #[Test]
+    public function persistent_replacement_temp_cleanup_failure_reports_leftover_after_restoring_original(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        $original = "<?php\n\nnamespace App\\Skir\\Admin\\Users;\n\nfinal class UsersController\n{\n}\n";
+        file_put_contents($controllerPath, $original);
+        $failingTemp = null;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use (&$failingTemp): void {
+                if ($operation !== 'remove' || ! is_file($path) || ! str_contains($path, '/app/Skir/')) {
+                    return;
+                }
+
+                $contents = file_get_contents($path);
+
+                if ($failingTemp === null && is_string($contents) && str_contains($contents, 'SkirMethod')) {
+                    $failingTemp = $path;
+                }
+
+                if ($path === $failingTemp) {
+                    throw new RuntimeException('Persistent replacement temp cleanup failure.');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('Persistent cleanup should be reported.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('mutation was rolled back successfully', $exception->getMessage());
+            self::assertStringNotContainsString('could not be rolled back safely', $exception->getMessage());
+            self::assertStringContainsString((string) $failingTemp, $exception->getMessage());
+        }
+
+        self::assertSame($original, file_get_contents($controllerPath));
+        self::assertIsString($failingTemp);
+        self::assertFileExists($failingTemp);
+    }
+
+    #[Test]
+    public function restoration_and_temp_cleanup_failure_preserves_both_recovery_paths_in_diagnostics(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, "<?php\n\nnamespace App\\Skir\\Admin\\Users;\n\nfinal class UsersController\n{\n}\n");
+        $stagedSnapshots = 0;
+        $failingTemp = null;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($controllerPath, &$stagedSnapshots, &$failingTemp): void {
+                if ($operation === 'snapshot' && str_contains(basename($path), '.skir-')) {
+                    $stagedSnapshots++;
+
+                    if ($stagedSnapshots === 2) {
+                        throw new RuntimeException('Backup snapshot failure before restoration.');
+                    }
+                }
+
+                if ($operation === 'restoreBackup') {
+                    file_put_contents($controllerPath, '<?php // restoration conflict');
+                }
+
+                if ($operation === 'remove' && is_file($path) && str_contains($path, '/app/Skir/')) {
+                    $contents = file_get_contents($path);
+
+                    if ($failingTemp === null && is_string($contents) && str_contains($contents, 'SkirMethod')) {
+                        $failingTemp = $path;
+                    }
+
+                    if ($path === $failingTemp) {
+                        throw new RuntimeException('Persistent temp cleanup failure during restoration.');
+                    }
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('Both recovery failures should be reported.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('preserved at', $exception->getMessage());
+            self::assertStringContainsString((string) $failingTemp, $exception->getMessage());
+        }
+
+        self::assertSame('<?php // restoration conflict', file_get_contents($controllerPath));
+        self::assertIsString($failingTemp);
+        self::assertFileExists($failingTemp);
+        self::assertCount(2, glob(dirname($controllerPath).'/.skir-*') ?: []);
     }
 
     private function method(
