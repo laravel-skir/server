@@ -460,6 +460,53 @@ final class ControllerScaffolderTest extends TestCase
     }
 
     #[Test]
+    #[DataProvider('nullableFormRequestStyles')]
+    public function generated_form_requests_preserve_nullable_object_manifest_declarations(
+        ControllerStyle $style,
+        string $requestType,
+        string $expectedType,
+    ): void {
+        $method = $this->method(
+            requestType: $requestType,
+            requestClass: 'Skir\\Admin\\GetUserRequest',
+        );
+
+        $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+            [$method],
+            $style,
+            null,
+            true,
+        ));
+        $controllerPath = collect($result->createdPaths)
+            ->first(static fn (string $path): bool => str_ends_with($path, 'Controller.php'));
+        $source = (string) file_get_contents($controllerPath);
+
+        self::assertStringContainsString(
+            "{$expectedType} \$request, SkirContext \$context",
+            $source,
+        );
+
+        $lint = new Process([PHP_BINARY, '-l', $controllerPath]);
+        $lint->run();
+        self::assertTrue($lint->isSuccessful(), $lint->getErrorOutput().$lint->getOutput());
+    }
+
+    /** @return iterable<string, array{ControllerStyle, string, string}> */
+    public static function nullableFormRequestStyles(): iterable
+    {
+        yield 'module nullable shorthand' => [
+            ControllerStyle::Module,
+            '?Skir\\Admin\\GetUserRequest',
+            '?GetUserFormRequest',
+        ];
+        yield 'invokable nullable union' => [
+            ControllerStyle::Invokable,
+            'Skir\\Admin\\GetUserRequest|null',
+            'GetUserFormRequest|null',
+        ];
+    }
+
+    #[Test]
     #[DataProvider('controllerStyles')]
     public function producer_shaped_manifest_types_resolve_to_the_declared_php_classes(ControllerStyle $style): void
     {

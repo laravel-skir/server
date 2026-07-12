@@ -46,7 +46,12 @@ final class ControllerMethodRenderer
         $enumClass = $imports->alias($method->enumClass);
         $requestType = $formRequestClass === null
             ? $this->resolveManifestType($method->requestType, $method->requestClass, $imports)
-            : $imports->alias($formRequestClass);
+            : $this->resolveManifestType(
+                $method->requestType,
+                $method->requestClass,
+                $imports,
+                $formRequestClass,
+            );
         $responseType = $this->resolveManifestType($method->responseType, $method->responseClass, $imports);
         $phpMethod = $invokable ? '__invoke' : $method->phpMethod;
         $requestParameter = $requestType === 'void' ? '' : "{$requestType} \$request, ";
@@ -67,10 +72,11 @@ PHP;
         string $manifestType,
         ?string $class,
         PhpImportMap $imports,
+        ?string $replacementClass = null,
     ): string {
         $resolvedType = preg_replace_callback(
             '/(?<![a-zA-Z0-9_\\\\])([a-zA-Z_][a-zA-Z0-9_]*(?:\\\\[a-zA-Z_][a-zA-Z0-9_]*)*)(?![a-zA-Z0-9_\\\\])/',
-            function (array $matches) use ($class, $imports): string {
+            function (array $matches) use ($class, $imports, $replacementClass): string {
                 $type = $matches[1];
 
                 if ($this->isBuiltinType($type)) {
@@ -79,12 +85,12 @@ PHP;
 
                 if ($class !== null) {
                     if (strcasecmp(ltrim($type, '\\'), ltrim($class, '\\')) === 0) {
-                        return $imports->alias($class);
+                        return $imports->alias($replacementClass ?? $class);
                     }
 
                     if (! str_contains($type, '\\')) {
                         if (strcasecmp($type, class_basename($class)) === 0) {
-                            return $imports->alias($class);
+                            return $imports->alias($replacementClass ?? $class);
                         }
                     }
                 }

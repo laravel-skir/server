@@ -42,7 +42,8 @@ final readonly class SkirRpcController
             $payload = $this->payloadFromRequest($request, $codec);
             $method = $this->methodFromPayload($payload);
             $procedure = $server->procedure($method);
-            $decodedRequest = $codec->decodeRequest($procedure->descriptor, $payload['request'] ?? 0);
+            $encodedRequest = array_key_exists('request', $payload) ? $payload['request'] : 0;
+            $decodedRequest = $codec->decodeRequest($procedure->descriptor, $encodedRequest);
             $result = $procedure->invoke($decodedRequest, new RequestContext($request, $procedure->descriptor));
             $encodedResponse = $codec->encodeResponse($procedure->descriptor, $result);
 

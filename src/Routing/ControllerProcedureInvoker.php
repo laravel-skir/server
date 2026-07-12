@@ -50,6 +50,12 @@ final readonly class ControllerProcedureInvoker
                 continue;
             }
 
+            if ($request === null && $type?->allowsNull()) {
+                $arguments[] = null;
+
+                continue;
+            }
+
             if ($this->isFormRequest($typeName)) {
                 if (! is_array($request)) {
                     throw new InvalidArgumentException('Skir Form Requests require a decoded array/object payload.');
