@@ -12,7 +12,10 @@ use Throwable;
 
 final class FormRequestScaffolder
 {
-    public function __construct(private readonly AtomicFilePublisher $publisher) {}
+    public function __construct(
+        private readonly AtomicFilePublisher $publisher,
+        private readonly ScaffoldingFilesystem $filesystem,
+    ) {}
 
     public function render(SkirMethodDefinition $method, ?string $className = null): RenderedFile
     {
@@ -26,6 +29,7 @@ final class FormRequestScaffolder
         $this->validateClassReference($method->requestClass, 'requestClass');
 
         $requestClassName = class_basename($method->requestClass);
+        $this->validateImports($resolvedClassName, $requestClassName);
         $destinationPath = $this->destinationPath($namespace, $resolvedClassName);
         $source = $this->renderStub([
             '{{ namespace }}' => $namespace,
@@ -47,36 +51,24 @@ final class FormRequestScaffolder
     {
         $rendered = $this->render($method, $className);
 
-        if (file_exists($rendered->destinationPath)) {
+        if ($this->filesystem->exists($rendered->destinationPath)) {
             throw SkirScaffoldingException::existingFile($rendered->destinationPath);
         }
 
         $directory = dirname($rendered->destinationPath);
 
-        if (! is_dir($directory)) {
-            if (! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-                throw SkirScaffoldingException::unableToCreateDirectory($directory);
-            }
+        if (! $this->filesystem->isDirectory($directory)) {
+            $this->filesystem->makeDirectory($directory);
         }
 
-        $temporaryPath = tempnam($directory, '.skir-');
-
-        if ($temporaryPath === false) {
-            throw SkirScaffoldingException::unableToWriteFile($rendered->destinationPath);
-        }
+        $temporaryPath = $this->filesystem->temporaryFile($directory);
 
         try {
-            $writtenBytes = file_put_contents($temporaryPath, $rendered->source, LOCK_EX);
-
-            if ($writtenBytes !== strlen($rendered->source)) {
-                throw SkirScaffoldingException::unableToWriteFile($rendered->destinationPath);
-            }
-
+            $this->filesystem->write($temporaryPath, $rendered->source);
+            $this->filesystem->chmod($temporaryPath, 0666 & ~umask());
             $this->publisher->publish($temporaryPath, $rendered->destinationPath);
         } finally {
-            if (file_exists($temporaryPath)) {
-                @unlink($temporaryPath);
-            }
+            $this->filesystem->remove($temporaryPath);
         }
 
         return $rendered->destinationPath;
@@ -100,6 +92,13 @@ final class FormRequestScaffolder
             if (! $this->isIdentifier($namespaceSegment)) {
                 throw SkirScaffoldingException::invalidRequestNamespace($configuredNamespace);
             }
+        }
+
+        $applicationNamespace = $this->applicationNamespace();
+        $applicationNamespaceSegments = explode('\\', $applicationNamespace);
+
+        if (array_slice($namespaceSegments, 0, count($applicationNamespaceSegments)) !== $applicationNamespaceSegments) {
+            throw SkirScaffoldingException::namespaceOutsideApplication($configuredNamespace, $applicationNamespace);
         }
 
         $moduleSegments = explode('.', $method->module);
@@ -138,11 +137,7 @@ final class FormRequestScaffolder
     private function renderStub(array $replacements): string
     {
         $stubPath = dirname(__DIR__, 2).'/stubs/skir-form-request.stub';
-        $stub = file_get_contents($stubPath);
-
-        if ($stub === false) {
-            throw SkirScaffoldingException::unreadableStub($stubPath);
-        }
+        $stub = $this->filesystem->read($stubPath);
 
         return str_replace(array_keys($replacements), array_values($replacements), $stub);
     }
@@ -166,6 +161,16 @@ final class FormRequestScaffolder
             if (! $this->isIdentifier($segment)) {
                 throw SkirScaffoldingException::invalidIdentifier($field, $class);
             }
+        }
+    }
+
+    private function validateImports(string $className, string $requestClassName): void
+    {
+        $shortNames = [$className, $requestClassName, 'ValidationRule', 'SkirFormRequest'];
+        $normalizedShortNames = array_map(strtolower(...), $shortNames);
+
+        if (count(array_unique($normalizedShortNames)) !== count($normalizedShortNames)) {
+            throw SkirScaffoldingException::importCollision($className);
         }
     }
 

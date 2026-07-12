@@ -22,6 +22,7 @@ final class {{ className }} extends SkirFormRequest
         return [];
     }
 
+    /** @return class-string<{{ requestClassName }}> */
     protected function skirClass(): string
     {
         return {{ requestClassName }}::class;

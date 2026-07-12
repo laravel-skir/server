@@ -107,30 +107,40 @@ final class SkirScaffoldingException extends RuntimeException
         return new self("Form request [{$path}] already exists and was not modified.");
     }
 
-    public static function unreadableStub(string $path): self
-    {
-        return new self("Skir form request stub [{$path}] does not exist or is not readable.");
-    }
-
     public static function invalidRenderedSource(string $path, Throwable $exception): self
     {
         return new self("Rendered form request for [{$path}] is invalid PHP: {$exception->getMessage()}", previous: $exception);
-    }
-
-    public static function unableToCreateDirectory(string $path): self
-    {
-        return new self("Unable to create the form request directory [{$path}].");
-    }
-
-    public static function unableToWriteFile(string $path): self
-    {
-        return new self("Unable to atomically write the form request [{$path}].");
     }
 
     public static function atomicPublicationUnavailable(string $path): self
     {
         return new self(
             "Atomic publication is unavailable for form request [{$path}]. Ensure the application filesystem supports same-directory hard links.",
+        );
+    }
+
+    public static function importCollision(string $className): self
+    {
+        return new self("Generated class name [{$className}] collides with an imported class short name.");
+    }
+
+    public static function namespaceOutsideApplication(string $namespace, string $applicationNamespace): self
+    {
+        return new self(
+            "Skir scaffolding configuration [request_namespace] [{$namespace}] must start with application namespace [{$applicationNamespace}].",
+        );
+    }
+
+    public static function filesystemOperationFailed(
+        string $operation,
+        string $path,
+        ?Throwable $exception = null,
+    ): self {
+        $details = $exception === null ? '' : ": {$exception->getMessage()}";
+
+        return new self(
+            "Filesystem operation [{$operation}] failed for [{$path}]{$details}.",
+            previous: $exception,
         );
     }
 }

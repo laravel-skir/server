@@ -10,7 +10,10 @@ use Skir\Server\Exceptions\SkirScaffoldingException;
 final class AtomicFilePublisher
 {
     /** @param (Closure(string, string): bool)|null $linker */
-    public function __construct(private readonly ?Closure $linker = null) {}
+    public function __construct(
+        private readonly ScaffoldingFilesystem $filesystem,
+        private readonly ?Closure $linker = null,
+    ) {}
 
     public function publish(string $temporaryPath, string $destinationPath): void
     {
@@ -19,15 +22,13 @@ final class AtomicFilePublisher
                 return;
             }
 
-            if (file_exists($destinationPath)) {
+            if ($this->filesystem->exists($destinationPath)) {
                 throw SkirScaffoldingException::existingFile($destinationPath);
             }
 
             throw SkirScaffoldingException::atomicPublicationUnavailable($destinationPath);
         } finally {
-            if (file_exists($temporaryPath)) {
-                @unlink($temporaryPath);
-            }
+            $this->filesystem->remove($temporaryPath);
         }
     }
 
