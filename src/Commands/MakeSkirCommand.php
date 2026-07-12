@@ -52,6 +52,7 @@ final class MakeSkirCommand extends Command
     {
         try {
             $this->validateOptionCombinations();
+            [$style, $singleController, $withFormRequests] = $this->resolvePreferences();
 
             $generatorStatus = $this->generateDefinitions();
 
@@ -60,7 +61,12 @@ final class MakeSkirCommand extends Command
             }
 
             $this->manifests->reload();
-            $selection = $this->selection();
+            $selection = new ScaffoldingSelection(
+                $this->selectedMethods(),
+                $style,
+                $singleController,
+                $withFormRequests,
+            );
             $this->preview($selection);
 
             if ($this->input->isInteractive()) {
@@ -108,55 +114,21 @@ final class MakeSkirCommand extends Command
             }
         }
 
-        $style = $this->configuredStyle();
         $controller = $this->option('controller');
         $styleOption = $this->option('style');
 
         if (is_string($controller)) {
             $hasExplicitStyle = is_string($styleOption) && $styleOption !== '';
 
-            if ($hasExplicitStyle && $style !== ControllerStyle::Single) {
-                throw new InvalidArgumentException('Option [--controller] may only be used with the [single] controller style.');
+            if ($hasExplicitStyle) {
+                if ($styleOption !== ControllerStyle::Single->value) {
+                    throw new InvalidArgumentException('Option [--controller] may only be used with the [single] controller style.');
+                }
             }
-
-            $this->controllerClassValidator->resolve($controller);
         }
-
-        $this->validateScaffoldingConfiguration($style, $controller);
 
         if ($this->option('generate')) {
             $this->generatorCommand();
-        }
-    }
-
-    private function validateScaffoldingConfiguration(ControllerStyle $style, mixed $controller): void
-    {
-        $this->controllerClassValidator->resolveControllerNamespace();
-
-        if ($style === ControllerStyle::Single && ! is_string($controller)) {
-            $configuredController = config('skir-server.scaffolding.single_controller');
-
-            if (! is_string($configuredController)) {
-                throw SkirScaffoldingException::invalidSingleController(get_debug_type($configuredController));
-            }
-
-            $this->controllerClassValidator->resolve($configuredController);
-        }
-
-        if ($this->option('without-requests')) {
-            return;
-        }
-
-        $this->requestNamespaceValidator->resolve();
-
-        if ($this->option('with-requests')) {
-            return;
-        }
-
-        $formRequests = config('skir-server.scaffolding.form_requests');
-
-        if (! is_bool($formRequests)) {
-            throw new InvalidArgumentException('Skir scaffolding configuration [form_requests] must be a boolean.');
         }
     }
 
@@ -178,7 +150,9 @@ final class MakeSkirCommand extends Command
                 },
             );
         } catch (Throwable $exception) {
-            $this->components->error("Skir generator failed to start or run: {$exception->getMessage()}");
+            $this->components->error(
+                'Skir generator failed to start or run. '.get_debug_type($exception).'.',
+            );
 
             return self::FAILURE;
         }
@@ -214,9 +188,9 @@ final class MakeSkirCommand extends Command
         return $command;
     }
 
-    private function selection(): ScaffoldingSelection
+    /** @return array{ControllerStyle, string|null, bool} */
+    private function resolvePreferences(): array
     {
-        $methods = $this->selectedMethods();
         $styleOption = $this->option('style');
         $controllerOption = $this->option('controller');
         $hasExplicitStyle = is_string($styleOption) && $styleOption !== '';
@@ -228,9 +202,17 @@ final class MakeSkirCommand extends Command
         $singleController = $style === ControllerStyle::Single
             ? $this->singleController()
             : null;
-        $withFormRequests = $this->withFormRequests($methods);
+        $withFormRequests = $this->withFormRequests();
 
-        return new ScaffoldingSelection($methods, $style, $singleController, $withFormRequests);
+        if ($style !== ControllerStyle::Single) {
+            $this->controllerClassValidator->resolveControllerNamespace();
+        }
+
+        if ($withFormRequests) {
+            $this->requestNamespaceValidator->resolve();
+        }
+
+        return [$style, $singleController, $withFormRequests];
     }
 
     /** @return list<SkirMethodDefinition> */
@@ -406,7 +388,7 @@ final class MakeSkirCommand extends Command
     {
         $option = $this->option('controller');
 
-        if (is_string($option) && trim($option) !== '') {
+        if (is_string($option)) {
             return $this->controllerClassValidator->resolve($option);
         }
 
@@ -419,7 +401,7 @@ final class MakeSkirCommand extends Command
         }
 
         if (! $this->input->isInteractive()) {
-            return $configured;
+            return $this->controllerClassValidator->resolve($configured);
         }
 
         $controller = text(
@@ -431,18 +413,8 @@ final class MakeSkirCommand extends Command
         return $this->controllerClassValidator->resolve($controller);
     }
 
-    /** @param list<SkirMethodDefinition> $methods */
-    private function withFormRequests(array $methods): bool
+    private function withFormRequests(): bool
     {
-        $objectRequestMethods = array_filter(
-            $methods,
-            static fn (SkirMethodDefinition $method): bool => $method->requestClass !== null,
-        );
-
-        if ($objectRequestMethods === []) {
-            return false;
-        }
-
         if ($this->option('with-requests')) {
             return true;
         }
@@ -451,14 +423,17 @@ final class MakeSkirCommand extends Command
             return false;
         }
 
-        $configured = config('skir-server.scaffolding.form_requests', true);
-        $default = is_bool($configured) ? $configured : true;
+        $configured = config('skir-server.scaffolding.form_requests');
 
-        if (! $this->input->isInteractive()) {
-            return $default;
+        if (! is_bool($configured)) {
+            throw new InvalidArgumentException('Skir scaffolding configuration [form_requests] must be a boolean.');
         }
 
-        return confirm('Generate form requests?', default: $default);
+        if (! $this->input->isInteractive()) {
+            return $configured;
+        }
+
+        return confirm('Generate form requests?', default: $configured);
     }
 
     private function preview(ScaffoldingSelection $selection): void

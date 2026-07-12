@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Skir\Server\Tests\Feature\Commands;
 
 use Closure;
+use Illuminate\Support\Facades\Artisan;
 use RuntimeException;
 use Skir\Server\Commands\GeneratorRunner;
 use Skir\Server\Commands\SymfonyGeneratorRunner;
@@ -128,7 +129,8 @@ final class MakeSkirCommandTest extends TestCase
     public function test_configured_defaults_are_used_when_options_are_omitted(): void
     {
         config()->set('skir-server.scaffolding.controller_style', 'single');
-        config()->set('skir-server.scaffolding.single_controller', 'App\\Rpc\\ConfiguredController');
+        config()->set('skir-server.scaffolding.controller_namespace', 'Domain\\Unused');
+        config()->set('skir-server.scaffolding.single_controller', '\\App\\Rpc\\ConfiguredController\\');
         config()->set('skir-server.scaffolding.form_requests', false);
 
         $this->artisan('skir:make', [
@@ -406,14 +408,19 @@ final class MakeSkirCommandTest extends TestCase
         file_put_contents($this->manifestPath(), 'invalid stale manifest');
         $this->app->instance(GeneratorRunner::class, new ThrowingGeneratorRunner);
 
-        $this->artisan('skir:make', [
+        $status = Artisan::call('skir:make', [
             '--generate' => true,
             '--method' => ['Generated.Later'],
             '--without-requests' => true,
             '--no-interaction' => true,
-        ])->expectsOutputToContain('failed to start or run: process unavailable')
-            ->assertFailed();
+        ]);
+        $output = Artisan::output();
 
+        self::assertSame(1, $status);
+        self::assertStringContainsString('failed to start or run', $output);
+        self::assertStringContainsString(RuntimeException::class, $output);
+        self::assertStringNotContainsString('process unavailable', $output);
+        self::assertStringNotContainsString('secret-token', $output);
         self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
     }
 
@@ -465,6 +472,12 @@ final class MakeSkirCommandTest extends TestCase
         $this->app->instance(GeneratorRunner::class, $runner);
 
         $this->artisan('skir:make', ['--generate' => true])
+            ->expectsChoice('Controller style', 'module', [
+                'module' => 'One controller per module',
+                'invokable' => 'One invokable controller per method',
+                'single' => 'One controller for this selection',
+            ])
+            ->expectsConfirmation('Generate form requests?', 'yes')
             ->expectsChoice('Select Skir modules or methods', ['method:Admin.Users.GetUser'], [
                 'module:Admin.Users' => 'Module: Admin.Users',
                 'module:Status.Health' => 'Module: Status.Health',
@@ -472,12 +485,6 @@ final class MakeSkirCommandTest extends TestCase
                 'method:Admin.Users.DeleteUser' => 'Method: Admin.Users.DeleteUser',
                 'method:Status.Health.Ping' => 'Method: Status.Health.Ping',
             ])
-            ->expectsChoice('Controller style', 'module', [
-                'module' => 'One controller per module',
-                'invokable' => 'One invokable controller per method',
-                'single' => 'One controller for this selection',
-            ])
-            ->expectsConfirmation('Generate form requests?', 'yes')
             ->expectsConfirmation('Create these files?', 'no')
             ->expectsOutputToContain('No controller or request files were written')
             ->assertSuccessful();
@@ -515,7 +522,16 @@ final class MakeSkirCommandTest extends TestCase
 
     public function test_interactive_single_controller_entry_is_used(): void
     {
+        config()->set('skir-server.scaffolding.controller_namespace', 'Domain\\Unused');
+
         $this->artisan('skir:make')
+            ->expectsChoice('Controller style', 'single', [
+                'module' => 'One controller per module',
+                'invokable' => 'One invokable controller per method',
+                'single' => 'One controller for this selection',
+            ])
+            ->expectsQuestion('Single controller class', '\\App\\Rpc\\InteractiveController\\')
+            ->expectsConfirmation('Generate form requests?', 'no')
             ->expectsChoice('Select Skir modules or methods', ['method:Admin.Users.GetUser'], [
                 'module:Admin.Users' => 'Module: Admin.Users',
                 'module:Status.Health' => 'Module: Status.Health',
@@ -523,13 +539,7 @@ final class MakeSkirCommandTest extends TestCase
                 'method:Admin.Users.DeleteUser' => 'Method: Admin.Users.DeleteUser',
                 'method:Status.Health.Ping' => 'Method: Status.Health.Ping',
             ])
-            ->expectsChoice('Controller style', 'single', [
-                'module' => 'One controller per module',
-                'invokable' => 'One invokable controller per method',
-                'single' => 'One controller for this selection',
-            ])
-            ->expectsQuestion('Single controller class', 'App\\Rpc\\InteractiveController')
-            ->expectsConfirmation('Generate form requests?', 'no')
+            ->expectsOutputToContain('single (App\\Rpc\\InteractiveController)')
             ->expectsConfirmation('Create these files?', 'yes')
             ->assertSuccessful();
 
@@ -561,6 +571,98 @@ final class MakeSkirCommandTest extends TestCase
             ->assertSuccessful();
 
         self::assertFileExists($this->temporaryDirectory.'/app/Rpc/ExplicitInteractiveController.php');
+    }
+
+    public function test_invalid_configured_single_controller_does_not_block_interactive_module_choice(): void
+    {
+        config()->set('skir-server.scaffolding.controller_style', 'single');
+        config()->set('skir-server.scaffolding.single_controller', 'Domain\\InvalidController');
+        $runner = new RecordingGeneratorRunner;
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--without-requests' => true,
+        ])->expectsChoice('Controller style', 'module', [
+            'module' => 'One controller per module',
+            'invokable' => 'One invokable controller per method',
+            'single' => 'One controller for this selection',
+        ])->expectsChoice('Select Skir modules or methods', ['method:Status.Health.Ping'], [
+            'module:Admin.Users' => 'Module: Admin.Users',
+            'module:Status.Health' => 'Module: Status.Health',
+            'method:Admin.Users.GetUser' => 'Method: Admin.Users.GetUser',
+            'method:Admin.Users.DeleteUser' => 'Method: Admin.Users.DeleteUser',
+            'method:Status.Health.Ping' => 'Method: Status.Health.Ping',
+        ])->expectsConfirmation('Create these files?', 'yes')
+            ->assertSuccessful();
+
+        self::assertCount(1, $runner->commands);
+        self::assertFileExists($this->temporaryDirectory.'/app/Skir/Status/Health/HealthController.php');
+    }
+
+    public function test_invalid_interactive_single_controller_fails_before_generator(): void
+    {
+        $runner = new RecordingGeneratorRunner;
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--without-requests' => true,
+        ])->expectsChoice('Controller style', 'single', [
+            'module' => 'One controller per module',
+            'invokable' => 'One invokable controller per method',
+            'single' => 'One controller for this selection',
+        ])->expectsQuestion('Single controller class', 'Domain\\InvalidController')
+            ->expectsOutputToContain('Single Skir controller')
+            ->assertFailed();
+
+        self::assertSame([], $runner->commands);
+    }
+
+    public function test_fully_qualified_single_controller_skips_unused_controller_namespace_configuration(): void
+    {
+        config()->set('skir-server.scaffolding.controller_namespace', 'Domain\\Invalid');
+        $runner = new RecordingGeneratorRunner;
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--method' => ['Status.Health.Ping'],
+            '--controller' => '\\App\\Rpc\\CanonicalController\\',
+            '--without-requests' => true,
+            '--no-interaction' => true,
+        ])->expectsOutputToContain('single (App\\Rpc\\CanonicalController)')
+            ->assertSuccessful();
+
+        self::assertCount(1, $runner->commands);
+        self::assertFileExists($this->temporaryDirectory.'/app/Rpc/CanonicalController.php');
+    }
+
+    public function test_interactive_method_selection_uses_the_reloaded_generated_manifest(): void
+    {
+        $runner = new RecordingGeneratorRunner(function (): void {
+            $this->writeManifest([
+                $this->module('Generated.Reports', 'App\\Skir\\ReportMethod', [
+                    $this->method('Export', 'Export', null),
+                ]),
+            ]);
+        });
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--without-requests' => true,
+        ])->expectsChoice('Controller style', 'module', [
+            'module' => 'One controller per module',
+            'invokable' => 'One invokable controller per method',
+            'single' => 'One controller for this selection',
+        ])->expectsChoice('Select Skir modules or methods', ['method:Generated.Reports.Export'], [
+            'module:Generated.Reports' => 'Module: Generated.Reports',
+            'method:Generated.Reports.Export' => 'Method: Generated.Reports.Export',
+        ])->expectsConfirmation('Create these files?', 'yes')
+            ->assertSuccessful();
+
+        self::assertFileExists($this->temporaryDirectory.'/app/Skir/Generated/Reports/ReportsController.php');
     }
 
     public function test_generator_output_is_written_raw_for_stdout_and_stderr(): void
@@ -705,6 +807,6 @@ final class ThrowingGeneratorRunner implements GeneratorRunner
 {
     public function run(array $command, string $workingDirectory, ?float $timeout, Closure $output): int
     {
-        throw new RuntimeException('process unavailable');
+        throw new RuntimeException('process unavailable secret-token');
     }
 }
