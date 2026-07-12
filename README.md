@@ -36,11 +36,21 @@ generators:
       namespace: App\Skir
 ```
 
-Then run generation from your Laravel app:
+Then run the configured generators from the project root:
+
+```bash
+npx skir gen
+```
+
+### Optional Artisan wrapper
+
+The [`php-skir/client`](https://github.com/php-skir/client) package provides an optional Artisan wrapper for running the configured Skir generators:
 
 ```bash
 php artisan skir:generate-client
 ```
+
+The client package is not required to host a SkirRPC server. It will usually be installed in a separate application that consumes the server, so server projects can run `npx skir gen` directly.
 
 For every module that contains methods, the generator writes:
 
