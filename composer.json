@@ -23,11 +23,10 @@
     ],
     "require": {
         "php": "^8.4",
-        "illuminate/contracts": "^13.0",
-        "illuminate/http": "^13.0",
-        "illuminate/routing": "^13.0",
-        "illuminate/support": "^13.0",
-        "php-skir/runtime": "^0.1@dev"
+        "laravel/framework": "^13.0",
+        "nikic/php-parser": "^5.8",
+        "php-skir/runtime": "^0.1@dev",
+        "symfony/process": "^7.4|^8.0"
     },
     "require-dev": {
         "laravel/pint": "^1.29",

@@ -4,8 +4,13 @@ declare(strict_types=1);
 
 namespace Skir\Server\Routing;
 
+use Illuminate\Contracts\Container\Container;
+use InvalidArgumentException;
 use ReflectionMethod;
 use ReflectionNamedType;
+use Skir\Server\Http\Requests\SkirFormRequest;
+use Skir\Server\Http\Requests\SkirFormRequestResolver;
+use Skir\Server\Hydration\SkirPayloadHydrator;
 use Skir\Server\RequestContext;
 use Skir\Server\SkirContext;
 
@@ -17,11 +22,14 @@ final readonly class ControllerProcedureInvoker
     public function __construct(
         private string $controller,
         private string $method,
+        private Container $container,
+        private SkirPayloadHydrator $payloadHydrator,
+        private SkirFormRequestResolver $formRequestResolver,
     ) {}
 
     public function __invoke(mixed $request, SkirContext $context): mixed
     {
-        $controller = app($this->controller);
+        $controller = $this->container->make($this->controller);
         $reflection = new ReflectionMethod($controller, $this->method);
         $arguments = [];
 
@@ -41,31 +49,43 @@ final readonly class ControllerProcedureInvoker
                 continue;
             }
 
-            $arguments[] = $this->hydrateRequest($typeName, $request);
+            if ($this->isFormRequest($typeName)) {
+                if (! is_array($request)) {
+                    throw new InvalidArgumentException('Skir Form Requests require a decoded array/object payload.');
+                }
+
+                /** @var class-string<SkirFormRequest> $typeName */
+                $arguments[] = $this->formRequestResolver->resolve($typeName, $request, $context);
+
+                continue;
+            }
+
+            if ($typeName !== null) {
+                if ($this->payloadHydrator->supports($typeName)) {
+                    /** @var class-string $typeName */
+                    $arguments[] = $this->payloadHydrator->hydrate($typeName, $request);
+
+                    continue;
+                }
+            }
+
+            $arguments[] = $request;
         }
 
         return $this->normalizeResponse($reflection->invokeArgs($controller, $arguments));
     }
 
-    private function hydrateRequest(?string $typeName, mixed $request): mixed
+    private function isFormRequest(?string $typeName): bool
     {
         if ($typeName === null) {
-            return $request;
+            return false;
         }
 
         if (! class_exists($typeName)) {
-            return $request;
+            return false;
         }
 
-        if (method_exists($typeName, 'makeFromSkirPayload')) {
-            return $typeName::makeFromSkirPayload($request);
-        }
-
-        if (method_exists($typeName, 'fromArray')) {
-            return $typeName::fromArray($request);
-        }
-
-        return $request;
+        return is_a($typeName, SkirFormRequest::class, true);
     }
 
     private function normalizeResponse(mixed $response): mixed
