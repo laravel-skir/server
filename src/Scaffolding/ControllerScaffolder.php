@@ -301,7 +301,7 @@ final class ControllerScaffolder
             : $imports->alias($formRequestClass);
         $responseType = $this->resolveManifestType($method->responseType, $method->responseClass, $imports);
         $phpMethod = $invokable ? '__invoke' : $method->phpMethod;
-        $requestParameter = "{$requestType} \$request, ";
+        $requestParameter = $requestType === 'void' ? '' : "{$requestType} \$request, ";
         $attribute = $imports->alias(SkirMethod::class);
         $context = $imports->alias(SkirContext::class);
         $logicException = $imports->alias('LogicException');

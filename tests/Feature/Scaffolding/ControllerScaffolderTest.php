@@ -115,7 +115,7 @@ final class ControllerScaffolderTest extends TestCase
             new RouteRegistration('App\\Skir\\Admin\\Users\\UsersController'),
         ], $result->registrations);
         self::assertSame([
-            'Skir::controller(\\App\\Skir\\Admin\\Users\\UsersController::class)',
+            '\\Skir\\Server\\Facades\\Skir::controller(\\App\\Skir\\Admin\\Users\\UsersController::class)',
         ], $result->routeHints);
         self::assertFileExists($path);
 
@@ -146,8 +146,8 @@ final class ControllerScaffolderTest extends TestCase
         $deletePath = $this->temporaryDirectory.'/app/Skir/Admin/Users/DeleteUserController.php';
         self::assertSame([$getPath, $deletePath], $result->createdPaths);
         self::assertSame([
-            'Skir::method(\\App\\Skir\\Methods\\AdminUsersMethod::GetUser, \\App\\Skir\\Admin\\Users\\GetUserController::class)',
-            'Skir::method(\\App\\Skir\\Methods\\AdminUsersMethod::DeleteUser, \\App\\Skir\\Admin\\Users\\DeleteUserController::class)',
+            '\\Skir\\Server\\Facades\\Skir::method(\\App\\Skir\\Methods\\AdminUsersMethod::GetUser, \\App\\Skir\\Admin\\Users\\GetUserController::class)',
+            '\\Skir\\Server\\Facades\\Skir::method(\\App\\Skir\\Methods\\AdminUsersMethod::DeleteUser, \\App\\Skir\\Admin\\Users\\DeleteUserController::class)',
         ], $result->routeHints);
         self::assertSame('App\\Skir\\Admin\\Users\\GetUserController', $result->registrations[0]->controllerClass);
         self::assertSame('App\\Skir\\Methods\\AdminUsersMethod', $result->registrations[0]->enumClass);
@@ -181,7 +181,7 @@ final class ControllerScaffolderTest extends TestCase
         $path = $this->temporaryDirectory.'/app/Skir/SkirController.php';
         self::assertSame([$path], $result->createdPaths);
         self::assertSame([
-            'Skir::controller(\\App\\Skir\\SkirController::class)',
+            '\\Skir\\Server\\Facades\\Skir::controller(\\App\\Skir\\SkirController::class)',
         ], $result->routeHints);
         self::assertStringContainsString('public function getInvoice(string $request, SkirContext $context): ?int', (string) file_get_contents($path));
 
@@ -512,9 +512,36 @@ final class ControllerScaffolderTest extends TestCase
     public static function invalidPhpTypeProvider(): iterable
     {
         yield 'never parameter' => ['never', 'string'];
-        yield 'void parameter' => ['void', 'string'];
         yield 'mixed union parameter' => ['mixed|null', 'string'];
         yield 'redundant nullable return' => ['string', '?mixed'];
+    }
+
+    #[Test]
+    public function a_void_request_type_creates_a_no_payload_method_with_only_context(): void
+    {
+        $method = $this->method(
+            name: 'Ping',
+            enumCase: 'Ping',
+            phpMethod: 'ping',
+            requestType: 'void',
+            requestClass: null,
+            responseType: 'string',
+            responseClass: null,
+        );
+
+        $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+            [$method],
+            ControllerStyle::Module,
+            null,
+            false,
+        ));
+        $source = (string) file_get_contents($result->createdPaths[0]);
+
+        self::assertStringContainsString(
+            'public function ping(SkirContext $context): string',
+            $source,
+        );
+        self::assertStringNotContainsString('$request', $source);
     }
 
     #[Test]
