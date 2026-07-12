@@ -22,5 +22,6 @@ final readonly class RenderedController
         public bool $changed = true,
         public ?string $originalSource = null,
         public array $warnings = [],
+        public ?FileSnapshot $originalSnapshot = null,
     ) {}
 }

@@ -118,53 +118,150 @@ final class ScaffoldingFilesystem
         }
     }
 
-    public function replaceIfUnchanged(
-        string $sourcePath,
-        string $destinationPath,
-        string $expectedContents,
-    ): bool {
-        $replaced = $this->run(
-            'replaceIfUnchanged',
-            $destinationPath,
-            static function () use ($sourcePath, $destinationPath, $expectedContents): bool {
-                $handle = fopen($destinationPath, 'r+b');
+    public function snapshot(string $path): ?FileSnapshot
+    {
+        $snapshot = $this->run('snapshot', $path, static function () use ($path): ?FileSnapshot {
+            if (! is_file($path)) {
+                return null;
+            }
 
-                if (! is_resource($handle)) {
+            $handle = @fopen($path, 'rb');
+
+            if (! is_resource($handle)) {
+                return null;
+            }
+
+            try {
+                if (! flock($handle, LOCK_SH)) {
+                    return null;
+                }
+
+                $openedFile = fstat($handle);
+                rewind($handle);
+                $contents = stream_get_contents($handle);
+                clearstatcache(true, $path);
+                $currentPath = @lstat($path);
+
+                if (! is_array($openedFile) || ! is_array($currentPath) || ! is_string($contents)) {
+                    return null;
+                }
+
+                if ($openedFile['dev'] !== $currentPath['dev'] || $openedFile['ino'] !== $currentPath['ino']) {
+                    return null;
+                }
+
+                return new FileSnapshot(
+                    $contents,
+                    (int) $openedFile['dev'],
+                    (int) $openedFile['ino'],
+                    (int) $openedFile['mode'] & 07777,
+                );
+            } finally {
+                flock($handle, LOCK_UN);
+                fclose($handle);
+            }
+        });
+
+        return $snapshot instanceof FileSnapshot ? $snapshot : null;
+    }
+
+    public function displaceToBackup(string $destinationPath): string
+    {
+        $backupPath = $this->temporaryFile(dirname($destinationPath));
+        $this->remove($backupPath);
+        $moved = $this->run(
+            'displaceToBackup',
+            $destinationPath,
+            static fn (): bool => rename($destinationPath, $backupPath),
+        );
+
+        if ($moved !== true) {
+            throw SkirScaffoldingException::filesystemOperationFailed('displaceToBackup', $destinationPath);
+        }
+
+        return $backupPath;
+    }
+
+    public function restoreBackup(string $backupPath, string $destinationPath): bool
+    {
+        if (! @link($backupPath, $destinationPath)) {
+            return false;
+        }
+
+        $this->remove($backupPath);
+
+        return true;
+    }
+
+    /**
+     * Atomically removes the path only while it still matches the snapshotted inode, contents, and mode.
+     *
+     * Advisory locking also protects cooperative in-place writers. Non-cooperating in-place writes
+     * cannot be made fully transactional by portable PHP filesystem APIs.
+     */
+    public function removeIfUnchanged(string $path, FileSnapshot $expected): bool
+    {
+        $removed = $this->run('removeIfUnchanged', $path, static function () use ($path, $expected): bool {
+            $handle = @fopen($path, 'r+b');
+
+            if (! is_resource($handle)) {
+                return false;
+            }
+
+            try {
+                if (! flock($handle, LOCK_EX)) {
                     return false;
                 }
 
-                try {
-                    if (! flock($handle, LOCK_EX)) {
-                        return false;
-                    }
+                $openedFile = fstat($handle);
+                rewind($handle);
+                $contents = stream_get_contents($handle);
+                clearstatcache(true, $path);
+                $currentPath = @lstat($path);
 
-                    $openedFile = fstat($handle);
-                    rewind($handle);
-                    $currentContents = stream_get_contents($handle);
-                    clearstatcache(true, $destinationPath);
-                    $currentPath = lstat($destinationPath);
-
-                    if (! is_array($openedFile) || ! is_array($currentPath)) {
-                        return false;
-                    }
-
-                    if ($currentContents !== $expectedContents) {
-                        return false;
-                    }
-
-                    if ($openedFile['dev'] !== $currentPath['dev'] || $openedFile['ino'] !== $currentPath['ino']) {
-                        return false;
-                    }
-
-                    return rename($sourcePath, $destinationPath);
-                } finally {
-                    flock($handle, LOCK_UN);
-                    fclose($handle);
+                if (! is_array($openedFile) || ! is_array($currentPath)) {
+                    return false;
                 }
-            },
-        );
 
-        return $replaced === true;
+                if ($contents !== $expected->contents) {
+                    return false;
+                }
+
+                if ((int) $openedFile['dev'] !== $expected->device || (int) $openedFile['ino'] !== $expected->inode) {
+                    return false;
+                }
+
+                if (((int) $openedFile['mode'] & 07777) !== $expected->mode) {
+                    return false;
+                }
+
+                if ($openedFile['dev'] !== $currentPath['dev'] || $openedFile['ino'] !== $currentPath['ino']) {
+                    return false;
+                }
+
+                return unlink($path);
+            } finally {
+                flock($handle, LOCK_UN);
+                fclose($handle);
+            }
+        });
+
+        return $removed === true;
+    }
+
+    public function removeDirectoryIfEmpty(string $path): void
+    {
+        if (! $this->isDirectory($path)) {
+            return;
+        }
+
+        $entries = scandir($path);
+
+        if ($entries !== ['.', '..']) {
+            return;
+        }
+
+        $this->run('removeDirectory', $path, static fn (): bool => rmdir($path));
     }
 
     private function run(string $operation, string $path, Closure $callback): mixed

@@ -39,6 +39,8 @@ final class PhpControllerEditor
         array $requestClasses,
         bool $invokable = false,
     ): EditedController {
+        $this->validateSelectedIdentities($methods);
+
         try {
             $this->sourceValidator->validate($source, $path);
         } catch (Throwable $exception) {
@@ -357,5 +359,25 @@ final class PhpControllerEditor
     private function identityKey(string $enumClass, string $enumCase): string
     {
         return strtolower($enumClass).'::'.$enumCase;
+    }
+
+    /** @param list<SkirMethodDefinition> $methods */
+    private function validateSelectedIdentities(array $methods): void
+    {
+        $selected = [];
+
+        foreach ($methods as $method) {
+            $key = strtolower($method->enumClass.'::'.$method->enumCase);
+
+            if (isset($selected[$key])) {
+                throw SkirScaffoldingException::duplicateControllerSelectionIdentity(
+                    $selected[$key]->id(),
+                    $method->id(),
+                    $selected[$key]->enumClass.'::'.$selected[$key]->enumCase,
+                );
+            }
+
+            $selected[$key] = $method;
+        }
     }
 }

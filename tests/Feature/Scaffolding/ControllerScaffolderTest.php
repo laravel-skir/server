@@ -91,6 +91,24 @@ final class ControllerScaffolderTest extends TestCase
     }
 
     #[Test]
+    public function a_selection_rejects_duplicate_skir_identities_even_when_method_ids_differ(): void
+    {
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage('share Skir identity [App\Skir\Methods\AdminUsersMethod::GetUser]');
+
+        new ScaffoldingSelection([
+            $this->method(),
+            $this->method(
+                module: 'Other.Module',
+                name: 'OtherName',
+                enumClass: 'app\skir\methods\adminusersmethod',
+                enumCase: 'getuser',
+                phpMethod: 'otherName',
+            ),
+        ], ControllerStyle::Single, null, false);
+    }
+
+    #[Test]
     public function it_creates_one_module_controller_with_all_selected_module_methods(): void
     {
         $selection = new ScaffoldingSelection([
@@ -756,7 +774,7 @@ final class UsersController
     }
 }
 PHP);
-        chmod($controllerPath, 0640);
+        chmod($controllerPath, 01740);
         $selection = new ScaffoldingSelection([
             $this->method(),
             $this->method(name: 'DeleteUser', enumCase: 'DeleteUser', phpMethod: 'deleteUser'),
@@ -768,7 +786,7 @@ PHP);
         self::assertSame([$controllerPath], $result->updatedPaths);
         self::assertSame([], $result->unchangedPaths);
         self::assertSame([], $result->warnings);
-        self::assertSame(0640, fileperms($controllerPath) & 0777);
+        self::assertSame(01740, fileperms($controllerPath) & 07777);
         self::assertStringContainsString("return 'handwritten'; // must survive regeneration", (string) file_get_contents($controllerPath));
         self::assertStringContainsString('public function deleteUser(', (string) file_get_contents($controllerPath));
 
@@ -876,6 +894,7 @@ PHP);
 
         self::assertSame($original, file_get_contents($controllerPath));
         self::assertFileDoesNotExist($requestPath);
+        self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app/Http');
     }
 
     #[Test]
@@ -973,16 +992,16 @@ final class UsersController
 {
 }
 PHP);
-        $controllerReads = 0;
+        $controllerSnapshots = 0;
         $filesystem = new ScaffoldingFilesystem(
-            static function (string $operation, string $path) use ($controllerPath, &$controllerReads): void {
-                if ($operation !== 'read' || $path !== $controllerPath) {
+            static function (string $operation, string $path) use ($controllerPath, &$controllerSnapshots): void {
+                if ($operation !== 'snapshot' || $path !== $controllerPath) {
                     return;
                 }
 
-                $controllerReads++;
+                $controllerSnapshots++;
 
-                if ($controllerReads === 2) {
+                if ($controllerSnapshots === 2) {
                     file_put_contents($controllerPath, '<?php // competing application edit');
                 }
             },
@@ -1028,7 +1047,7 @@ final class UsersController
 PHP);
         $filesystem = new ScaffoldingFilesystem(
             static function (string $operation, string $path) use ($controllerPath): void {
-                if ($operation === 'replaceIfUnchanged' && $path === $controllerPath) {
+                if ($operation === 'displaceToBackup' && $path === $controllerPath) {
                     file_put_contents($controllerPath, '<?php // edit made immediately before replacement');
                 }
             },
@@ -1129,7 +1148,7 @@ PHP;
         file_put_contents($billingPath, $billingSource);
         $filesystem = new ScaffoldingFilesystem(
             static function (string $operation, string $path) use ($billingPath): void {
-                if ($operation === 'replaceIfUnchanged' && $path === $billingPath) {
+                if ($operation === 'displaceToBackup' && $path === $billingPath) {
                     file_put_contents($billingPath, '<?php // competing billing edit');
                 }
             },
@@ -1164,6 +1183,256 @@ PHP;
         self::assertSame('<?php // competing billing edit', file_get_contents($billingPath));
         self::assertFileDoesNotExist($adminRequestPath);
         self::assertFileDoesNotExist($billingRequestPath);
+    }
+
+    #[Test]
+    public function a_request_publication_failure_rolls_back_an_existing_controller_update(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $requestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        $original = "<?php\n\nnamespace App\\Skir\\Admin\\Users;\n\nfinal class UsersController\n{\n}\n";
+        file_put_contents($controllerPath, $original);
+        $filesystem = new ScaffoldingFilesystem;
+        $publisher = new AtomicFilePublisher(
+            $filesystem,
+            static function (string $temporaryPath, string $destinationPath): bool {
+                if (str_ends_with($destinationPath, 'UsersController.php')) {
+                    return link($temporaryPath, $destinationPath);
+                }
+
+                return false;
+            },
+        );
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                true,
+            ));
+            self::fail('Request publication should fail.');
+        } catch (SkirScaffoldingException) {
+        }
+
+        self::assertSame($original, file_get_contents($controllerPath));
+        self::assertFileDoesNotExist($requestPath);
+    }
+
+    #[Test]
+    public function a_later_creation_failure_removes_every_file_created_by_the_transaction(): void
+    {
+        $createdDestinations = [];
+        $filesystem = new ScaffoldingFilesystem;
+        $publisher = new AtomicFilePublisher(
+            $filesystem,
+            static function (string $temporaryPath, string $destinationPath) use (&$createdDestinations): bool {
+                if (str_ends_with($destinationPath, 'DeleteUserFormRequest.php')) {
+                    return false;
+                }
+
+                $published = link($temporaryPath, $destinationPath);
+
+                if ($published) {
+                    $createdDestinations[] = $destinationPath;
+                }
+
+                return $published;
+            },
+        );
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection([
+                $this->method(),
+                $this->method(name: 'DeleteUser', enumCase: 'DeleteUser', phpMethod: 'deleteUser'),
+            ], ControllerStyle::Module, null, true));
+            self::fail('The later request creation should fail.');
+        } catch (SkirScaffoldingException) {
+        }
+
+        foreach ($createdDestinations as $createdDestination) {
+            self::assertFileDoesNotExist($createdDestination);
+        }
+
+        self::assertSame([], glob($this->temporaryDirectory.'/app/*') ?: []);
+    }
+
+    #[Test]
+    public function rollback_preserves_a_concurrently_edited_created_file_and_reports_failure(): void
+    {
+        $firstCreatedPath = null;
+        $filesystem = new ScaffoldingFilesystem;
+        $publisher = new AtomicFilePublisher(
+            $filesystem,
+            static function (string $temporaryPath, string $destinationPath) use (&$firstCreatedPath): bool {
+                if ($firstCreatedPath === null) {
+                    $published = link($temporaryPath, $destinationPath);
+                    $firstCreatedPath = $destinationPath;
+
+                    return $published;
+                }
+
+                file_put_contents($firstCreatedPath, '<?php // concurrent edit');
+
+                return false;
+            },
+        );
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection([
+                $this->method(),
+                $this->method(name: 'DeleteUser', enumCase: 'DeleteUser', phpMethod: 'deleteUser'),
+            ], ControllerStyle::Module, null, true));
+            self::fail('Rollback should report the concurrent edit.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('could not be rolled back safely', $exception->getMessage());
+        }
+
+        self::assertIsString($firstCreatedPath);
+        self::assertSame('<?php // concurrent edit', file_get_contents($firstCreatedPath));
+    }
+
+    #[Test]
+    public function an_unchanged_existing_request_is_revalidated_at_commit(): void
+    {
+        $requestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php';
+        mkdir(dirname($requestPath), 0777, true);
+        file_put_contents($requestPath, '<?php // application request');
+        $snapshots = 0;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($requestPath, &$snapshots): void {
+                if ($operation !== 'snapshot' || $path !== $requestPath) {
+                    return;
+                }
+
+                $snapshots++;
+
+                if ($snapshots === 2) {
+                    unlink($requestPath);
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                true,
+            ));
+            self::fail('The disappeared request should fail commit revalidation.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('changed during scaffolding', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($requestPath);
+        self::assertFileDoesNotExist($this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php');
+    }
+
+    #[Test]
+    public function an_unchanged_existing_controller_is_revalidated_at_commit(): void
+    {
+        $selection = new ScaffoldingSelection(
+            [$this->method()],
+            ControllerStyle::Module,
+            null,
+            false,
+        );
+        $initial = app(ControllerScaffolder::class)->scaffold($selection);
+        $controllerPath = $initial->createdPaths[0];
+        $snapshots = 0;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($controllerPath, &$snapshots): void {
+                if ($operation !== 'snapshot' || $path !== $controllerPath) {
+                    return;
+                }
+
+                $snapshots++;
+
+                if ($snapshots === 2) {
+                    file_put_contents($controllerPath, '<?php // changed after render');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold($selection);
+            self::fail('The changed controller should fail commit revalidation.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('changed during scaffolding', $exception->getMessage());
+        }
+
+        self::assertSame('<?php // changed after render', file_get_contents($controllerPath));
+    }
+
+    #[Test]
+    public function a_non_cooperating_atomic_save_cannot_be_clobbered_by_controller_replacement(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, "<?php\n\nnamespace App\\Skir\\Admin\\Users;\n\nfinal class UsersController\n{\n}\n");
+        $filesystem = new ScaffoldingFilesystem;
+        $publisher = new AtomicFilePublisher(
+            $filesystem,
+            static function (string $temporaryPath, string $destinationPath): bool {
+                file_put_contents($destinationPath, '<?php // atomic-save winner');
+
+                return false;
+            },
+        );
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('The atomic-save winner should prevent publication.');
+        } catch (SkirScaffoldingException) {
+        }
+
+        self::assertSame('<?php // atomic-save winner', file_get_contents($controllerPath));
+        self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
     }
 
     private function method(

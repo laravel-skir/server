@@ -35,6 +35,16 @@ final class SkirScaffoldingException extends RuntimeException
         return new self("Skir method [{$methodId}] was selected more than once for controller scaffolding.");
     }
 
+    public static function duplicateControllerSelectionIdentity(
+        string $firstMethodId,
+        string $secondMethodId,
+        string $identity,
+    ): self {
+        return new self(
+            "Skir methods [{$firstMethodId}] and [{$secondMethodId}] share Skir identity [{$identity}].",
+        );
+    }
+
     public static function unsupportedControllerStyle(string $style): self
     {
         return new self("Controller style [{$style}] is not supported.");
@@ -75,15 +85,17 @@ final class SkirScaffoldingException extends RuntimeException
         return new self("Skir controller [{$path}] changed during scaffolding and was not modified.");
     }
 
-    public static function controllerRollbackFailed(
-        string $path,
-        Throwable $publicationException,
-        Throwable $rollbackException,
-    ): self {
+    public static function transactionRollbackFailed(Throwable $mutation, Throwable $rollback): self
+    {
         return new self(
-            "Skir controller update failed and prior controller [{$path}] could not be restored safely. Publication error: {$publicationException->getMessage()} Rollback error: {$rollbackException->getMessage()}",
-            previous: $rollbackException,
+            "Skir scaffolding failed and could not be rolled back safely. Mutation error: {$mutation->getMessage()} Rollback error: {$rollback->getMessage()}",
+            previous: $rollback,
         );
+    }
+
+    public static function rollbackArtifactChanged(string $path): self
+    {
+        return new self("Scaffolding artifact [{$path}] changed after publication and could not be rolled back safely.");
     }
 
     public static function invalidControllerNamespace(mixed $namespace): self
@@ -131,6 +143,11 @@ final class SkirScaffoldingException extends RuntimeException
         return new self(
             "Scaffolding outputs [{$firstPath}] and [{$secondPath}] resolve to the same planned destination.",
         );
+    }
+
+    public static function plannedOutputAppeared(string $path): self
+    {
+        return new self("Scaffolding output [{$path}] appeared during scaffolding and was not modified.");
     }
 
     public static function renderedControllerDoesNotCompile(string $path, string $output): self

@@ -25,6 +25,7 @@ final readonly class ScaffoldingSelection
         }
 
         $selectedMethodIds = [];
+        $selectedIdentities = [];
 
         foreach ($methods as $method) {
             if (! $method instanceof SkirMethodDefinition) {
@@ -36,6 +37,17 @@ final readonly class ScaffoldingSelection
             }
 
             $selectedMethodIds[$method->id()] = true;
+            $identityKey = strtolower($method->enumClass.'::'.$method->enumCase);
+
+            if (isset($selectedIdentities[$identityKey])) {
+                throw SkirScaffoldingException::duplicateControllerSelectionIdentity(
+                    $selectedIdentities[$identityKey]->id(),
+                    $method->id(),
+                    $selectedIdentities[$identityKey]->enumClass.'::'.$selectedIdentities[$identityKey]->enumCase,
+                );
+            }
+
+            $selectedIdentities[$identityKey] = $method;
         }
 
         if ($singleController !== null && $style !== ControllerStyle::Single) {

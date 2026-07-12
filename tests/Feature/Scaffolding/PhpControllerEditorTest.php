@@ -238,6 +238,35 @@ PHP;
         );
     }
 
+    #[Test]
+    public function duplicate_selected_skir_identities_are_rejected_before_editing(): void
+    {
+        $source = "<?php\n\nnamespace App\\Skir\\Admin;\n\nfinal class AdminController\n{\n}\n";
+        $duplicate = new SkirMethodDefinition(
+            module: 'Other',
+            name: 'OtherName',
+            enumClass: 'app\skir\methods\adminmethod',
+            enumCase: 'getuser',
+            phpMethod: 'otherName',
+            requestType: 'void',
+            requestClass: null,
+            responseType: 'void',
+            responseClass: null,
+        );
+
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage('share Skir identity [App\Skir\Methods\AdminMethod::GetUser]');
+
+        app(PhpControllerEditor::class)->edit(
+            $source,
+            '/app/Skir/Admin/AdminController.php',
+            'App\Skir\Admin',
+            'AdminController',
+            [$this->method(), $duplicate],
+            [],
+        );
+    }
+
     private function method(): SkirMethodDefinition
     {
         return new SkirMethodDefinition(
