@@ -14,6 +14,7 @@ use Skir\Server\Hydration\SkirPayloadHydrator;
 use Skir\Server\RequestContext;
 use Skir\Server\SkirContext;
 
+/** @internal */
 final readonly class ControllerProcedureInvoker
 {
     /**

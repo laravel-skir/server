@@ -7,6 +7,7 @@ namespace Skir\Server\Http\Requests;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Routing\Redirector;
 use Skir\Server\SkirContext;
+use Symfony\Component\HttpFoundation\InputBag;
 
 final readonly class SkirFormRequestResolver
 {
@@ -31,6 +32,10 @@ final readonly class SkirFormRequestResolver
         $resolvedRequest->setRedirector($this->redirector);
         $resolvedRequest->setUserResolver($context->request->getUserResolver());
         $resolvedRequest->setRouteResolver($context->request->getRouteResolver());
+        $resolvedRequest->query->replace([]);
+        $resolvedRequest->request->replace([]);
+        $resolvedRequest->files->replace([]);
+        $resolvedRequest->setJson(new InputBag);
         $resolvedRequest->replace($decodedPayload);
         $resolvedRequest->validateResolved();
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Skir\Server\Tests\Feature;
 
+use Illuminate\Auth\GenericUser;
 use Illuminate\Support\Facades\Route;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\Test;
@@ -15,6 +16,7 @@ use Skir\Server\Contracts\SkirMethodReference;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
 use Skir\Server\Hydration\SkirPayloadHydrator;
+use Skir\Server\SkirContext;
 use Skir\Server\Tests\TestCase;
 
 final class SkirFormRequestTest extends TestCase
@@ -34,6 +36,16 @@ final class SkirFormRequestTest extends TestCase
         $this->assertSame('payload', $fromPayload->name);
         $this->assertSame('array', $fromArray->name);
         $this->assertSame('value', $fromValue->name);
+    }
+
+    #[Test]
+    public function it_prefers_the_generated_payload_factory_methods_in_supported_order(): void
+    {
+        $hydrator = app(SkirPayloadHydrator::class);
+
+        $payload = $hydrator->hydrate(MultipleFactoryFixture::class, ['name' => 'Maxim']);
+
+        $this->assertSame('makeFromSkirPayload', $payload->factory);
     }
 
     #[Test]
@@ -79,6 +91,78 @@ final class SkirFormRequestTest extends TestCase
             'name' => 'Maxim',
             'metadata' => 'preserved',
         ], RenameUserFormController::$requestPayload);
+    }
+
+    #[Test]
+    public function it_excludes_outer_query_parameters_from_the_decoded_form_request_payload(): void
+    {
+        Route::skirRpc('/isolated-form-request-rpc', [
+            Skir::method(FormRequestSkirMethod::RenameUser, RenameUserFormController::class),
+        ], SkirCodecs::standardJson());
+
+        RenameUserFormController::$invocations = 0;
+        RenameUserFormController::$requestPayload = [];
+
+        $this
+            ->postJson('/isolated-form-request-rpc?method=OuterMethod&request[unexpected]=value&queryOnly=contamination', [
+                'method' => 'RenameUser',
+                'request' => [
+                    'id' => 42,
+                    'name' => '  Maxim  ',
+                    'metadata' => 'decoded',
+                ],
+            ])
+            ->assertOk()
+            ->assertExactJson([
+                'id' => 42,
+                'name' => 'Maxim',
+                'metadata' => 'decoded',
+            ]);
+
+        $this->assertSame([
+            'id' => 42,
+            'name' => 'Maxim',
+            'metadata' => 'decoded',
+        ], RenameUserFormController::$requestPayload);
+    }
+
+    #[Test]
+    public function it_preserves_the_original_user_route_and_headers_during_authorization(): void
+    {
+        Route::skirRpc('/context-form-request-rpc/{tenant}', [
+            Skir::method(FormRequestSkirMethod::RenameUser, ContextFormController::class),
+        ], SkirCodecs::standardJson());
+
+        ContextAwareSkirRequest::$authorizationContext = [];
+        ContextFormController::$originalTransportPayload = [];
+        $this->be(new GenericUser(['id' => 42]));
+
+        $this
+            ->postJson('/context-form-request-rpc/acme', [
+                'method' => 'RenameUser',
+                'request' => [
+                    'id' => 42,
+                    'name' => 'Maxim',
+                    'metadata' => 'preserved',
+                ],
+            ], [
+                'X-Skir-Trace' => 'trace-123',
+            ])
+            ->assertOk();
+
+        $this->assertSame([
+            'userId' => 42,
+            'tenant' => 'acme',
+            'trace' => 'trace-123',
+        ], ContextAwareSkirRequest::$authorizationContext);
+        $this->assertSame([
+            'method' => 'RenameUser',
+            'request' => [
+                'id' => 42,
+                'name' => 'Maxim',
+                'metadata' => 'preserved',
+            ],
+        ], ContextFormController::$originalTransportPayload);
     }
 
     #[Test]
@@ -159,6 +243,29 @@ final readonly class FromSkirValueFixture
     }
 }
 
+final readonly class MultipleFactoryFixture
+{
+    public function __construct(public string $factory) {}
+
+    /** @param array{name: string} $payload */
+    public static function makeFromSkirPayload(array $payload): self
+    {
+        return new self('makeFromSkirPayload');
+    }
+
+    /** @param array{name: string} $payload */
+    public static function fromArray(array $payload): self
+    {
+        return new self('fromArray');
+    }
+
+    /** @param array{name: string} $payload */
+    public static function fromSkirValue(array $payload): self
+    {
+        return new self('fromSkirValue');
+    }
+}
+
 final readonly class UnsupportedPayloadFixture {}
 
 final class RenameUserSkirRequest extends SkirFormRequest
@@ -184,6 +291,43 @@ final class RenameUserSkirRequest extends SkirFormRequest
         $this->merge([
             'name' => trim((string) $this->input('name')),
         ]);
+    }
+
+    /** @return class-string<PreparedUserPayload> */
+    protected function skirClass(): string
+    {
+        return PreparedUserPayload::class;
+    }
+}
+
+final class ContextAwareSkirRequest extends SkirFormRequest
+{
+    /** @var array{userId?: mixed, tenant?: mixed, trace?: mixed} */
+    public static array $authorizationContext = [];
+
+    public function authorize(): bool
+    {
+        self::$authorizationContext = [
+            'userId' => $this->user()?->getAuthIdentifier(),
+            'tenant' => $this->route('tenant'),
+            'trace' => $this->header('X-Skir-Trace'),
+        ];
+
+        return self::$authorizationContext === [
+            'userId' => 42,
+            'tenant' => 'acme',
+            'trace' => 'trace-123',
+        ];
+    }
+
+    /** @return array<string, array<int, string>> */
+    public function rules(): array
+    {
+        return [
+            'id' => ['required', 'integer'],
+            'name' => ['required', 'string'],
+            'metadata' => ['required', 'string'],
+        ];
     }
 
     /** @return class-string<PreparedUserPayload> */
@@ -248,6 +392,22 @@ final class DirectPayloadController
     public function __invoke(FromArrayUserPayload $payload): FromArrayUserPayload
     {
         return new FromArrayUserPayload($payload->id, "{$payload->name} directly injected");
+    }
+}
+
+final class ContextFormController
+{
+    /** @var array<string, mixed> */
+    public static array $originalTransportPayload = [];
+
+    public function __invoke(ContextAwareSkirRequest $request, SkirContext $context): PreparedUserPayload
+    {
+        self::$originalTransportPayload = $context->request->json()->all();
+
+        /** @var PreparedUserPayload $payload */
+        $payload = $request->skir();
+
+        return $payload;
     }
 }
 
