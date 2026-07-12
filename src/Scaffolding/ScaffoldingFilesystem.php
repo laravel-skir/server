@@ -118,17 +118,53 @@ final class ScaffoldingFilesystem
         }
     }
 
-    public function replace(string $sourcePath, string $destinationPath): void
-    {
+    public function replaceIfUnchanged(
+        string $sourcePath,
+        string $destinationPath,
+        string $expectedContents,
+    ): bool {
         $replaced = $this->run(
-            'replace',
+            'replaceIfUnchanged',
             $destinationPath,
-            static fn (): bool => rename($sourcePath, $destinationPath),
+            static function () use ($sourcePath, $destinationPath, $expectedContents): bool {
+                $handle = fopen($destinationPath, 'r+b');
+
+                if (! is_resource($handle)) {
+                    return false;
+                }
+
+                try {
+                    if (! flock($handle, LOCK_EX)) {
+                        return false;
+                    }
+
+                    $openedFile = fstat($handle);
+                    rewind($handle);
+                    $currentContents = stream_get_contents($handle);
+                    clearstatcache(true, $destinationPath);
+                    $currentPath = lstat($destinationPath);
+
+                    if (! is_array($openedFile) || ! is_array($currentPath)) {
+                        return false;
+                    }
+
+                    if ($currentContents !== $expectedContents) {
+                        return false;
+                    }
+
+                    if ($openedFile['dev'] !== $currentPath['dev'] || $openedFile['ino'] !== $currentPath['ino']) {
+                        return false;
+                    }
+
+                    return rename($sourcePath, $destinationPath);
+                } finally {
+                    flock($handle, LOCK_UN);
+                    fclose($handle);
+                }
+            },
         );
 
-        if ($replaced !== true) {
-            throw SkirScaffoldingException::filesystemOperationFailed('replace', $destinationPath);
-        }
+        return $replaced === true;
     }
 
     private function run(string $operation, string $path, Closure $callback): mixed

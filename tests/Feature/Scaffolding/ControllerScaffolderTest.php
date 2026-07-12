@@ -756,6 +756,7 @@ final class UsersController
     }
 }
 PHP);
+        chmod($controllerPath, 0640);
         $selection = new ScaffoldingSelection([
             $this->method(),
             $this->method(name: 'DeleteUser', enumCase: 'DeleteUser', phpMethod: 'deleteUser'),
@@ -767,6 +768,7 @@ PHP);
         self::assertSame([$controllerPath], $result->updatedPaths);
         self::assertSame([], $result->unchangedPaths);
         self::assertSame([], $result->warnings);
+        self::assertSame(0640, fileperms($controllerPath) & 0777);
         self::assertStringContainsString("return 'handwritten'; // must survive regeneration", (string) file_get_contents($controllerPath));
         self::assertStringContainsString('public function deleteUser(', (string) file_get_contents($controllerPath));
 
@@ -1007,6 +1009,161 @@ PHP);
 
         self::assertSame('<?php // competing application edit', file_get_contents($controllerPath));
         self::assertFileDoesNotExist($requestPath);
+    }
+
+    #[Test]
+    public function a_controller_changed_at_atomic_replacement_preserves_the_edit_and_publishes_no_request(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $requestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, <<<'PHP'
+<?php
+
+namespace App\Skir\Admin\Users;
+
+final class UsersController
+{
+}
+PHP);
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($controllerPath): void {
+                if ($operation === 'replaceIfUnchanged' && $path === $controllerPath) {
+                    file_put_contents($controllerPath, '<?php // edit made immediately before replacement');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                true,
+            ));
+            self::fail('A controller changed at replacement should not be overwritten.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('changed during scaffolding', $exception->getMessage());
+        }
+
+        self::assertSame('<?php // edit made immediately before replacement', file_get_contents($controllerPath));
+        self::assertFileDoesNotExist($requestPath);
+        self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function an_invokable_controller_with_a_different_identity_conflicts_before_writes(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/GetUserController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, <<<'PHP'
+<?php
+
+namespace App\Skir\Admin\Users;
+
+use App\Skir\Methods\AdminUsersMethod;
+use Skir\Server\Attributes\SkirMethod;
+
+final class GetUserController
+{
+    #[SkirMethod(AdminUsersMethod::Different)]
+    public function __invoke(): string
+    {
+        return 'handwritten';
+    }
+}
+PHP);
+        $original = file_get_contents($controllerPath);
+
+        try {
+            app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Invokable,
+                null,
+                false,
+            ));
+            self::fail('A stale invokable identity should conflict.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('PHP method [__invoke] already exists', $exception->getMessage());
+        }
+
+        self::assertSame($original, file_get_contents($controllerPath));
+        self::assertStringNotContainsString('function getUser(', (string) file_get_contents($controllerPath));
+    }
+
+    #[Test]
+    public function a_later_controller_cas_failure_rolls_back_prior_controller_updates(): void
+    {
+        $adminPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $billingPath = $this->temporaryDirectory.'/app/Skir/Billing/Invoices/InvoicesController.php';
+        $adminRequestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/GetUserFormRequest.php';
+        $billingRequestPath = $this->temporaryDirectory.'/app/Http/Requests/Skir/Billing/Invoices/GetInvoiceFormRequest.php';
+        mkdir(dirname($adminPath), 0777, true);
+        mkdir(dirname($billingPath), 0777, true);
+        $adminSource = <<<'PHP'
+<?php
+
+namespace App\Skir\Admin\Users;
+
+final class UsersController
+{
+}
+PHP;
+        $billingSource = <<<'PHP'
+<?php
+
+namespace App\Skir\Billing\Invoices;
+
+final class InvoicesController
+{
+}
+PHP;
+        file_put_contents($adminPath, $adminSource);
+        file_put_contents($billingPath, $billingSource);
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($billingPath): void {
+                if ($operation === 'replaceIfUnchanged' && $path === $billingPath) {
+                    file_put_contents($billingPath, '<?php // competing billing edit');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection([
+                $this->method(),
+                $this->method(
+                    module: 'Billing.Invoices',
+                    name: 'GetInvoice',
+                    enumClass: 'App\Skir\Methods\BillingMethod',
+                    enumCase: 'GetInvoice',
+                    phpMethod: 'getInvoice',
+                    requestType: 'GetInvoiceRequest',
+                    requestClass: 'App\Skir\Dto\GetInvoiceRequest',
+                ),
+            ], ControllerStyle::Module, null, true));
+            self::fail('The later controller CAS should fail.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('changed during scaffolding', $exception->getMessage());
+        }
+
+        self::assertSame($adminSource, file_get_contents($adminPath));
+        self::assertSame('<?php // competing billing edit', file_get_contents($billingPath));
+        self::assertFileDoesNotExist($adminRequestPath);
+        self::assertFileDoesNotExist($billingRequestPath);
     }
 
     private function method(

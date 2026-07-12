@@ -117,6 +117,40 @@ PHP;
     }
 
     #[Test]
+    public function it_rejects_an_occupied_php_method_with_a_different_skir_identity(): void
+    {
+        $source = <<<'PHP'
+<?php
+
+namespace App\Skir\Admin;
+
+use App\Skir\Methods\AdminMethod;
+use Skir\Server\Attributes\SkirMethod;
+
+final class AdminController
+{
+    #[SkirMethod(AdminMethod::Different)]
+    public function getUser(): string
+    {
+        return 'application method';
+    }
+}
+PHP;
+
+        $this->expectException(SkirScaffoldingException::class);
+        $this->expectExceptionMessage('PHP method [getUser] already exists without Skir identity [App\Skir\Methods\AdminMethod::GetUser]');
+
+        app(PhpControllerEditor::class)->edit(
+            $source,
+            '/app/Skir/Admin/AdminController.php',
+            'App\Skir\Admin',
+            'AdminController',
+            [$this->method()],
+            [],
+        );
+    }
+
+    #[Test]
     public function it_respects_existing_aliases_and_avoids_import_name_collisions(): void
     {
         $source = <<<'PHP'

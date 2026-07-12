@@ -37,6 +37,7 @@ final class PhpControllerEditor
         string $className,
         array $methods,
         array $requestClasses,
+        bool $invokable = false,
     ): EditedController {
         try {
             $this->sourceValidator->validate($source, $path);
@@ -69,7 +70,7 @@ final class PhpControllerEditor
 
         [$namespaceNode, $class] = $this->findClass($statements, $namespace, $className, $path);
         $imports = $this->importMap($namespaceNode, $className);
-        [$identities, $methodNames] = $this->existingMethods($class, $path);
+        [$identities, $methodNames, $identityMethods] = $this->existingMethods($class, $path);
         $selectedIdentities = [];
         $missingMethods = [];
 
@@ -77,14 +78,26 @@ final class PhpControllerEditor
             $identity = $this->identity($method->enumClass, $method->enumCase);
             $selectedIdentities[$this->identityKey($method->enumClass, $method->enumCase)] = $identity;
 
-            if (isset($identities[$this->identityKey($method->enumClass, $method->enumCase)])) {
+            $identityKey = $this->identityKey($method->enumClass, $method->enumCase);
+
+            if (isset($identities[$identityKey])) {
+                if ($invokable && strtolower($identityMethods[$identityKey]) !== '__invoke') {
+                    throw SkirScaffoldingException::occupiedControllerMethod(
+                        $path,
+                        '__invoke',
+                        $identity,
+                    );
+                }
+
                 continue;
             }
 
-            if (isset($methodNames[strtolower($method->phpMethod)])) {
+            $phpMethod = $invokable ? '__invoke' : $method->phpMethod;
+
+            if (isset($methodNames[strtolower($phpMethod)])) {
                 throw SkirScaffoldingException::occupiedControllerMethod(
                     $path,
-                    $method->phpMethod,
+                    $phpMethod,
                     $identity,
                 );
             }
@@ -106,7 +119,7 @@ final class PhpControllerEditor
                 $method,
                 $imports,
                 $requestClasses[$method->id()] ?? null,
-                false,
+                $invokable,
             ));
         }
 
@@ -203,7 +216,7 @@ final class PhpControllerEditor
     }
 
     /**
-     * @return array{array<string, string>, array<string, true>}
+     * @return array{array<string, string>, array<string, true>, array<string, string>}
      */
     private function existingMethods(
         Stmt\Class_ $class,
@@ -211,6 +224,7 @@ final class PhpControllerEditor
     ): array {
         $identities = [];
         $methodNames = [];
+        $identityMethods = [];
 
         foreach ($class->getMethods() as $method) {
             $methodNames[strtolower($method->name->toString())] = true;
@@ -228,9 +242,10 @@ final class PhpControllerEditor
             }
 
             $identities[$key] = $this->identity($enumClass, $enumCase);
+            $identityMethods[$key] = $method->name->toString();
         }
 
-        return [$identities, $methodNames];
+        return [$identities, $methodNames, $identityMethods];
     }
 
     /** @return array{string, string}|null */

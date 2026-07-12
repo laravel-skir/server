@@ -37,9 +37,23 @@ final class PhpImportMap
         $prefixLength = 1;
 
         while (isset($this->usedAliases[strtolower($alias)])) {
-            $prefix = $segments[count($segments) - 1 - $prefixLength] ?? 'Imported';
-            $alias = $prefix.$alias;
-            $prefixLength++;
+            $prefixIndex = count($segments) - 1 - $prefixLength;
+
+            if ($prefixIndex >= 0) {
+                $alias = $segments[$prefixIndex].$alias;
+                $prefixLength++;
+
+                continue;
+            }
+
+            $fallback = 'Imported'.$shortName;
+            $suffix = 1;
+            $alias = $fallback;
+
+            while (isset($this->usedAliases[strtolower($alias)])) {
+                $suffix++;
+                $alias = $fallback.$suffix;
+            }
         }
 
         $this->aliasesByClass[$class] = $alias;

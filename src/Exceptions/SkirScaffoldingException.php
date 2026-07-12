@@ -75,6 +75,17 @@ final class SkirScaffoldingException extends RuntimeException
         return new self("Skir controller [{$path}] changed during scaffolding and was not modified.");
     }
 
+    public static function controllerRollbackFailed(
+        string $path,
+        Throwable $publicationException,
+        Throwable $rollbackException,
+    ): self {
+        return new self(
+            "Skir controller update failed and prior controller [{$path}] could not be restored safely. Publication error: {$publicationException->getMessage()} Rollback error: {$rollbackException->getMessage()}",
+            previous: $rollbackException,
+        );
+    }
+
     public static function invalidControllerNamespace(mixed $namespace): self
     {
         $displayNamespace = is_scalar($namespace) ? (string) $namespace : get_debug_type($namespace);

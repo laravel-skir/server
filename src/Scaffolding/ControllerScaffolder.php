@@ -7,6 +7,7 @@ namespace Skir\Server\Scaffolding;
 use RuntimeException;
 use Skir\Server\Exceptions\SkirScaffoldingException;
 use Skir\Server\Scaffolding\Manifest\SkirMethodDefinition;
+use Throwable;
 
 final class ControllerScaffolder
 {
@@ -78,6 +79,37 @@ final class ControllerScaffolder
             }
         }
 
+        $updatedPaths = [];
+        $updatedControllers = [];
+
+        try {
+            foreach ($controllersToUpdate as $renderedController) {
+                $this->replace($renderedController->file, (string) $renderedController->originalSource);
+                $updatedControllers[] = $renderedController;
+                $updatedPaths[] = $renderedController->file->destinationPath;
+            }
+        } catch (Throwable $exception) {
+            foreach (array_reverse($updatedControllers) as $updatedController) {
+                try {
+                    $this->replace(
+                        new RenderedFile(
+                            $updatedController->file->destinationPath,
+                            (string) $updatedController->originalSource,
+                        ),
+                        $updatedController->file->source,
+                    );
+                } catch (Throwable $rollbackException) {
+                    throw SkirScaffoldingException::controllerRollbackFailed(
+                        $updatedController->file->destinationPath,
+                        $exception,
+                        $rollbackException,
+                    );
+                }
+            }
+
+            throw $exception;
+        }
+
         $createdPaths = [];
 
         foreach ($requestsToCreate as $renderedRequest) {
@@ -87,13 +119,6 @@ final class ControllerScaffolder
         foreach ($controllersToCreate as $renderedController) {
             $this->publish($renderedController->file);
             $createdPaths[] = $renderedController->file->destinationPath;
-        }
-
-        $updatedPaths = [];
-
-        foreach ($controllersToUpdate as $renderedController) {
-            $this->replace($renderedController->file);
-            $updatedPaths[] = $renderedController->file->destinationPath;
         }
 
         return new ControllerScaffoldingResult(
@@ -321,6 +346,7 @@ final class ControllerScaffolder
                 $className,
                 $methods,
                 $requestClasses,
+                $invokable,
             );
 
             return new RenderedController(
@@ -510,7 +536,7 @@ final class ControllerScaffolder
         }
     }
 
-    private function replace(RenderedFile $rendered): void
+    private function replace(RenderedFile $rendered, string $expectedSource): void
     {
         $directory = dirname($rendered->destinationPath);
         $temporaryPath = $this->filesystem->temporaryFile($directory);
@@ -519,7 +545,16 @@ final class ControllerScaffolder
             $this->filesystem->write($temporaryPath, $rendered->source);
             $permissions = fileperms($rendered->destinationPath);
             $this->filesystem->chmod($temporaryPath, is_int($permissions) ? $permissions & 0777 : 0666 & ~umask());
-            $this->filesystem->replace($temporaryPath, $rendered->destinationPath);
+
+            if (! $this->filesystem->replaceIfUnchanged(
+                $temporaryPath,
+                $rendered->destinationPath,
+                $expectedSource,
+            )) {
+                throw SkirScaffoldingException::controllerChangedDuringScaffolding(
+                    $rendered->destinationPath,
+                );
+            }
         } finally {
             $this->filesystem->remove($temporaryPath);
         }
