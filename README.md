@@ -225,7 +225,7 @@ final class GetUserFormRequest extends SkirFormRequest
 }
 ```
 
-The generated stub denies authorization by default; change `authorize()` when implementing it. In the controller, use validated request data through `skir()`:
+The generated stub denies authorization by default; change `authorize()` when implementing it. In the controller, use the hydrated Skir payload through `skir()`:
 
 ```php
 public function getUser(GetUserFormRequest $request, SkirContext $context): UserData
@@ -234,7 +234,7 @@ public function getUser(GetUserFormRequest $request, SkirContext $context): User
 }
 ```
 
-The Form Request receives only the decoded Skir request payload as its input while retaining Laravel request context such as the user, route, headers, and session. Its validation failures become package-local `skir_validation_failed` responses, and authorization failures become `skir_authorization_failed` responses. Exceptions deliberately thrown later by controller business logic retain Laravel's normal rendering and status behavior.
+The Form Request receives only the decoded Skir request payload as its input while retaining Laravel request context such as the user, route, headers, and session. After Laravel validation and authorization succeed, `skir()` hydrates that prepared full payload; validation rules do not need to enumerate every field in the Skir schema. Its validation failures become package-local `skir_validation_failed` responses, and authorization failures become `skir_authorization_failed` responses. Exceptions deliberately thrown later by controller business logic retain Laravel's normal rendering and status behavior.
 
 Form Requests are optional. A controller can instead type-hint the generated object and call Laravel's `Validator` facade explicitly when that better suits the implementation.
 

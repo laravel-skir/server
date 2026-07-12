@@ -460,6 +460,142 @@ final class ControllerScaffolderTest extends TestCase
     }
 
     #[Test]
+    #[DataProvider('controllerStyles')]
+    public function producer_shaped_manifest_types_resolve_to_the_declared_php_classes(ControllerStyle $style): void
+    {
+        $methods = [
+            $this->method(
+                name: 'CreateUser',
+                enumClass: 'Skir\\Admin\\AdminSkirMethod',
+                enumCase: 'CreateUser',
+                phpMethod: 'createUser',
+                requestType: 'Skir\\Admin\\CreateUserRequest',
+                requestClass: 'Skir\\Admin\\CreateUserRequest',
+                responseType: 'Skir\\Admin\\User',
+                responseClass: 'Skir\\Admin\\User',
+            ),
+            $this->method(
+                name: 'ResolveAddress',
+                enumClass: 'Skir\\Admin\\AdminSkirMethod',
+                enumCase: 'ResolveAddress',
+                phpMethod: 'resolveAddress',
+                requestType: '?Skir\\Common\\Address',
+                requestClass: 'Skir\\Common\\Address',
+                responseType: 'Skir\\Admin\\EnvelopeMetadata',
+                responseClass: 'Skir\\Admin\\EnvelopeMetadata',
+            ),
+            $this->method(
+                name: 'FindUsers',
+                enumClass: 'Skir\\Admin\\AdminSkirMethod',
+                enumCase: 'FindUsers',
+                phpMethod: 'findUsers',
+                requestType: 'Skir\\Admin\\UserScope',
+                requestClass: null,
+                responseType: 'Skir\\Admin\\UserScope',
+                responseClass: 'Skir\\Admin\\UserScope',
+            ),
+            $this->method(
+                name: 'MaybeFindUsers',
+                enumClass: 'Skir\\Admin\\AdminSkirMethod',
+                enumCase: 'MaybeFindUsers',
+                phpMethod: 'maybeFindUsers',
+                requestType: '?Skir\\Admin\\UserScope',
+                requestClass: null,
+                responseType: '?Skir\\Admin\\UserScope',
+                responseClass: 'Skir\\Admin\\UserScope',
+            ),
+        ];
+        $controller = $style === ControllerStyle::Single ? 'App\\Skir\\ContractController' : null;
+
+        $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+            $methods,
+            $style,
+            $controller,
+            true,
+        ));
+        $source = implode("\n", array_map(
+            static fn (string $path): string => (string) file_get_contents($path),
+            $result->createdPaths,
+        ));
+
+        self::assertStringContainsString('CreateUserFormRequest $request, SkirContext $context): User', $source);
+        self::assertStringContainsString('ResolveAddressFormRequest $request, SkirContext $context): EnvelopeMetadata', $source);
+        self::assertStringContainsString('\\Skir\\Admin\\UserScope $request, SkirContext $context): UserScope', $source);
+        self::assertStringContainsString('?\\Skir\\Admin\\UserScope $request, SkirContext $context): ?UserScope', $source);
+        self::assertStringNotContainsString('App\\Skir\\Admin\\CreateUserRequest', $source);
+        self::assertFileDoesNotExist($this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/FindUsersFormRequest.php');
+        self::assertFileDoesNotExist($this->temporaryDirectory.'/app/Http/Requests/Skir/Admin/Users/MaybeFindUsersFormRequest.php');
+
+        foreach ($result->createdPaths as $path) {
+            if (! str_ends_with($path, 'Controller.php')) {
+                continue;
+            }
+
+            $lint = new Process([PHP_BINARY, '-l', $path]);
+            $lint->run();
+            self::assertTrue($lint->isSuccessful(), $lint->getErrorOutput().$lint->getOutput());
+        }
+    }
+
+    /** @return iterable<string, array{ControllerStyle}> */
+    public static function controllerStyles(): iterable
+    {
+        yield 'module' => [ControllerStyle::Module];
+        yield 'invokable' => [ControllerStyle::Invokable];
+        yield 'single' => [ControllerStyle::Single];
+    }
+
+    #[Test]
+    #[DataProvider('controllerStyles')]
+    public function direct_record_types_from_producer_manifests_use_collision_safe_imports(ControllerStyle $style): void
+    {
+        $methods = [
+            $this->method(
+                name: 'CreateUser',
+                enumClass: 'Skir\\Admin\\AdminSkirMethod',
+                enumCase: 'CreateUser',
+                phpMethod: 'createUser',
+                requestType: 'Skir\\Admin\\CreateUserRequest',
+                requestClass: 'Skir\\Admin\\CreateUserRequest',
+                responseType: 'Skir\\Admin\\User',
+                responseClass: 'Skir\\Admin\\User',
+            ),
+            $this->method(
+                name: 'ResolveAddress',
+                enumClass: 'Skir\\Admin\\AdminSkirMethod',
+                enumCase: 'ResolveAddress',
+                phpMethod: 'resolveAddress',
+                requestType: '?Skir\\Common\\Address',
+                requestClass: 'Skir\\Common\\Address',
+                responseType: 'Skir\\Admin\\EnvelopeMetadata|null',
+                responseClass: 'Skir\\Admin\\EnvelopeMetadata',
+            ),
+        ];
+        $controller = $style === ControllerStyle::Single ? 'App\\Skir\\DirectContractController' : null;
+
+        $result = app(ControllerScaffolder::class)->scaffold(new ScaffoldingSelection(
+            $methods,
+            $style,
+            $controller,
+            false,
+        ));
+        $source = implode("\n", array_map(
+            static fn (string $path): string => (string) file_get_contents($path),
+            $result->createdPaths,
+        ));
+
+        self::assertStringContainsString('CreateUserRequest $request, SkirContext $context): User', $source);
+        self::assertStringContainsString('?Address $request, SkirContext $context): EnvelopeMetadata|null', $source);
+        self::assertStringNotContainsString('App\\Skir\\Admin\\CreateUserRequest', $source);
+
+        foreach ($result->createdPaths as $path) {
+            $lint = new Process([PHP_BINARY, '-l', $path]);
+            $lint->run();
+            self::assertTrue($lint->isSuccessful(), $lint->getErrorOutput().$lint->getOutput());
+        }
+    }
+
+    #[Test]
     public function it_aliases_colliding_imports_and_generates_php_that_compiles(): void
     {
         $selection = new ScaffoldingSelection([

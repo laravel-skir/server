@@ -31,6 +31,15 @@ final class MakeSkirRequestCommandTest extends TestCase
         config()->set('skir-server.manifests', [$this->writeManifest([
             $this->method('GetUser', 'App\\Skir\\Admin\\GetUserRequestData'),
             $this->method('Ping', null),
+            [
+                'name' => 'FindUsers',
+                'enumCase' => 'FindUsers',
+                'phpMethod' => 'findUsers',
+                'requestType' => '?Skir\\Admin\\UserScope',
+                'requestClass' => null,
+                'responseType' => 'Skir\\Admin\\UserScope',
+                'responseClass' => 'Skir\\Admin\\UserScope',
+            ],
         ])]);
     }
 
@@ -141,6 +150,15 @@ PHP."\n", file_get_contents($expectedPath));
     public function test_scalar_request_method_fails_without_writing(): void
     {
         $this->artisan('skir:make-request', ['method' => 'Admin.Users.Ping'])
+            ->expectsOutputToContain('does not have an object request class')
+            ->assertFailed();
+
+        self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
+    }
+
+    public function test_enum_request_method_fails_without_writing(): void
+    {
+        $this->artisan('skir:make-request', ['method' => 'Admin.Users.FindUsers'])
             ->expectsOutputToContain('does not have an object request class')
             ->assertFailed();
 

@@ -68,17 +68,54 @@ PHP;
         ?string $class,
         PhpImportMap $imports,
     ): string {
-        if ($class === null) {
-            return $manifestType;
-        }
+        $resolvedType = preg_replace_callback(
+            '/(?<![a-zA-Z0-9_\\\\])([a-zA-Z_][a-zA-Z0-9_]*(?:\\\\[a-zA-Z_][a-zA-Z0-9_]*)*)(?![a-zA-Z0-9_\\\\])/',
+            function (array $matches) use ($class, $imports): string {
+                $type = $matches[1];
 
-        $shortName = class_basename($class);
-        $resolvedType = preg_replace(
-            '/(?<![a-zA-Z0-9_])'.preg_quote($shortName, '/').'(?![a-zA-Z0-9_])/',
-            $imports->alias($class),
+                if ($this->isBuiltinType($type)) {
+                    return $type;
+                }
+
+                if ($class !== null) {
+                    if (strcasecmp(ltrim($type, '\\'), ltrim($class, '\\')) === 0) {
+                        return $imports->alias($class);
+                    }
+
+                    if (! str_contains($type, '\\')) {
+                        if (strcasecmp($type, class_basename($class)) === 0) {
+                            return $imports->alias($class);
+                        }
+                    }
+                }
+
+                return str_contains($type, '\\') ? '\\'.ltrim($type, '\\') : $type;
+            },
             $manifestType,
         );
 
         return is_string($resolvedType) ? $resolvedType : $manifestType;
+    }
+
+    private function isBuiltinType(string $type): bool
+    {
+        return in_array(strtolower($type), [
+            'array',
+            'bool',
+            'callable',
+            'false',
+            'float',
+            'int',
+            'iterable',
+            'mixed',
+            'never',
+            'null',
+            'object',
+            'self',
+            'static',
+            'string',
+            'true',
+            'void',
+        ], true);
     }
 }
