@@ -10,6 +10,81 @@ use Throwable;
 
 final class SkirScaffoldingException extends RuntimeException
 {
+    public static function emptyControllerSelection(): self
+    {
+        return new self('Controller scaffolding requires at least one Skir method.');
+    }
+
+    public static function invalidSingleControllerCombination(): self
+    {
+        return new self('A single controller class may only be supplied for the [single] controller style.');
+    }
+
+    public static function invalidControllerSelectionMethod(): self
+    {
+        return new self('Controller scaffolding selections may only contain Skir method definitions.');
+    }
+
+    public static function invalidControllerSelectionMethodList(): self
+    {
+        return new self('Controller scaffolding requires a list of Skir method definitions.');
+    }
+
+    public static function duplicateControllerSelectionMethod(string $methodId): self
+    {
+        return new self("Skir method [{$methodId}] was selected more than once for controller scaffolding.");
+    }
+
+    public static function unsupportedControllerStyle(string $style): self
+    {
+        return new self("Controller style [{$style}] is not supported.");
+    }
+
+    public static function existingController(string $path): self
+    {
+        return new self("Skir controller [{$path}] already exists and was not modified.");
+    }
+
+    public static function invalidControllerNamespace(mixed $namespace): self
+    {
+        $displayNamespace = is_scalar($namespace) ? (string) $namespace : get_debug_type($namespace);
+
+        return new self("Skir scaffolding configuration [controller_namespace] contains invalid namespace [{$displayNamespace}].");
+    }
+
+    public static function invalidRenderedController(string $path, Throwable $exception): self
+    {
+        return new self("Rendered Skir controller for [{$path}] is invalid PHP: {$exception->getMessage()}", previous: $exception);
+    }
+
+    public static function conflictingControllerMethod(string $method, string $controller): self
+    {
+        return new self("Skir controller [{$controller}] has conflicting PHP method [{$method}].");
+    }
+
+    public static function controllerNamespaceOutsideApplication(string $namespace, string $applicationNamespace): self
+    {
+        return new self(
+            "Skir scaffolding controller namespace [{$namespace}] must start with application namespace [{$applicationNamespace}].",
+        );
+    }
+
+    public static function invalidSingleController(string $controller): self
+    {
+        return new self("Single Skir controller [{$controller}] must be a canonical class under the application namespace.");
+    }
+
+    public static function cleanupFailedAfterControllerPublication(
+        string $destinationPath,
+        string $temporaryPath,
+        Throwable $exception,
+    ): self {
+        return new self(
+            "Skir controller [{$destinationPath}] was created, but temporary file cleanup failed; remove leftover [{$temporaryPath}] manually: {$exception->getMessage()}",
+            previous: $exception,
+        );
+    }
+
     public static function unreadableManifest(string $path, string $generatorCommand): self
     {
         return new self(
