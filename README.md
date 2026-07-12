@@ -30,6 +30,7 @@ generators:
 
 ```bash
 npx skir gen
+npx skir-laravel-data-generator configure-composer
 composer dump-autoload
 ```
 
@@ -39,7 +40,7 @@ Both generators write `skir-server-manifest.json` at the root of their configure
 app/Skir/skirout/skir-server-manifest.json
 ```
 
-Make the generated namespace available through Composer. For the example above, map `Skir\\` to `app/Skir/skirout/`, or use the generator's `configure-composer` command documented in its repository.
+The `configure-composer` step registers `Skir\\` to `app/Skir/skirout/` in the consuming application's `composer.json`. It does not run Composer, so rebuild the autoloader afterward as shown above. The generator repository also documents manual mapping and alternate project-root options.
 
 ## Scaffold controllers
 
