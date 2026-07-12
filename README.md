@@ -10,7 +10,14 @@ composer require php-skir/server
 
 ## Generate definitions and a manifest
 
-This package hosts and implements a SkirRPC server. Start by generating the PHP definitions and server scaffolding manifest with either [`skir-php-generator`](https://github.com/php-skir/skir-php-generator) or [`skir-laravel-data-generator`](https://github.com/php-skir/skir-laravel-data-generator):
+This package hosts and implements a SkirRPC server. Install the Skir CLI and one PHP generator in the Laravel application. This example uses [the Laravel Data generator](https://github.com/php-skir/skir-laravel-data-generator), which also requires `spatie/laravel-data`:
+
+```bash
+npm install --save-dev skir skir-laravel-data-generator
+composer require spatie/laravel-data
+```
+
+Use [`skir-php-generator`](https://github.com/php-skir/skir-php-generator) instead when standard PHP DTOs are preferred.
 
 ```yaml
 # skir.yml
@@ -112,7 +119,7 @@ return [
 
 Running `skir:make` again adds missing attributed methods to existing module and single controllers. It does not replace existing method definitions or delete methods that no longer appear in the selected manifest; stale attributed methods are reported as warnings. An identical rerun is a no-op.
 
-The command validates manifests, PHP syntax, class identities, imports, methods, and every planned destination before publishing changes. A conflicting PHP method, invalid controller, destination collision, or publication failure aborts the scaffolding transaction instead of leaving a partial set of controllers and requests.
+Planned controller source, method, import, and destination conflicts are checked before publication. Successful publications are journaled and rolled back when that can be done safely. Concurrent filesystem changes or rollback failures are surfaced with the affected paths and recovery details instead of being hidden.
 
 ### Controller layouts and route registration
 
@@ -183,6 +190,16 @@ php artisan skir:make-request Admin.Users.GetUser --name=ShowUserRequest
 Without a method argument, an interactive terminal offers the available object-request methods. The command refuses to overwrite an existing request class. Generated requests extend `Skir\Server\Http\Requests\SkirFormRequest`; their `@extends` template annotation gives `skir()` the generated data-object return type for static analysis:
 
 ```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Requests\Skir\Admin\Users;
+
+use Illuminate\Contracts\Validation\ValidationRule;
+use Skir\Admin\Users\GetUserRequestData;
+use Skir\Server\Http\Requests\SkirFormRequest;
+
 /** @extends SkirFormRequest<GetUserRequestData> */
 final class GetUserFormRequest extends SkirFormRequest
 {
@@ -191,11 +208,18 @@ final class GetUserFormRequest extends SkirFormRequest
         return true;
     }
 
+    /** @return array<string, ValidationRule|array<mixed>|string> */
     public function rules(): array
     {
         return [
             'userId' => ['required', 'integer', 'min:1'],
         ];
+    }
+
+    /** @return class-string<GetUserRequestData> */
+    protected function skirClass(): string
+    {
+        return GetUserRequestData::class;
     }
 }
 ```
