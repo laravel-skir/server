@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Skir\Server\Http\Controllers;
 
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use JsonException;
 use Skir\Runtime\Exceptions\SkirRuntimeException;
 use Skir\Server\Codecs\SkirCodec;
@@ -56,6 +58,10 @@ final readonly class SkirRpcController
             return $exception->toResponse();
         } catch (SkirRuntimeException $exception) {
             return SkirServerException::invalidRequest($exception->getMessage())->toResponse();
+        } catch (ValidationException $exception) {
+            return SkirServerException::validationFailed($exception->errors())->toResponse();
+        } catch (AuthorizationException) {
+            return SkirServerException::authorizationFailed()->toResponse();
         }
     }
 

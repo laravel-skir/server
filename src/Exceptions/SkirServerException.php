@@ -9,10 +9,14 @@ use RuntimeException;
 
 final class SkirServerException extends RuntimeException
 {
+    /**
+     * @param  array<string, array<int, string>>  $details
+     */
     private function __construct(
         string $message,
         public readonly string $errorCode,
         public readonly int $status,
+        public readonly array $details = [],
     ) {
         parent::__construct($message);
     }
@@ -41,13 +45,30 @@ final class SkirServerException extends RuntimeException
         );
     }
 
+    /** @param array<string, array<int, string>> $errors */
+    public static function validationFailed(array $errors): self
+    {
+        return new self('The given data was invalid.', 'skir_validation_failed', 422, $errors);
+    }
+
+    public static function authorizationFailed(): self
+    {
+        return new self('This action is unauthorized.', 'skir_authorization_failed', 403);
+    }
+
     public function toResponse(): JsonResponse
     {
+        $error = [
+            'code' => $this->errorCode,
+            'message' => $this->getMessage(),
+        ];
+
+        if ($this->details !== []) {
+            $error['details'] = $this->details;
+        }
+
         return response()->json([
-            'error' => [
-                'code' => $this->errorCode,
-                'message' => $this->getMessage(),
-            ],
+            'error' => $error,
         ], $this->status);
     }
 }

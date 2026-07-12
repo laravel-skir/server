@@ -183,9 +183,49 @@ final class SkirFormRequestTest extends TestCase
                     'metadata' => 'preserved',
                 ],
             ])
-            ->assertUnprocessable();
+            ->assertUnprocessable()
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_validation_failed',
+                    'message' => 'The given data was invalid.',
+                    'details' => [
+                        'name' => [
+                            'The name field is required.',
+                        ],
+                    ],
+                ],
+            ]);
 
         $this->assertSame(0, RenameUserFormController::$invocations);
+    }
+
+    #[Test]
+    public function it_stops_controller_execution_when_authorization_fails(): void
+    {
+        Route::skirRpc('/unauthorized-form-request-rpc', [
+            Skir::method(FormRequestSkirMethod::RenameUser, UnauthorizedFormController::class),
+        ], SkirCodecs::standardJson());
+
+        UnauthorizedFormController::$invocations = 0;
+
+        $this
+            ->postJson('/unauthorized-form-request-rpc', [
+                'method' => 'RenameUser',
+                'request' => [
+                    'id' => 42,
+                    'name' => 'Maxim',
+                    'metadata' => 'preserved',
+                ],
+            ])
+            ->assertForbidden()
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_authorization_failed',
+                    'message' => 'This action is unauthorized.',
+                ],
+            ]);
+
+        $this->assertSame(0, UnauthorizedFormController::$invocations);
     }
 
     #[Test]
@@ -337,6 +377,30 @@ final class ContextAwareSkirRequest extends SkirFormRequest
     }
 }
 
+final class UnauthorizedSkirRequest extends SkirFormRequest
+{
+    public function authorize(): bool
+    {
+        return false;
+    }
+
+    /** @return array<string, array<int, string>> */
+    public function rules(): array
+    {
+        return [
+            'id' => ['required', 'integer'],
+            'name' => ['required', 'string'],
+            'metadata' => ['required', 'string'],
+        ];
+    }
+
+    /** @return class-string<PreparedUserPayload> */
+    protected function skirClass(): string
+    {
+        return PreparedUserPayload::class;
+    }
+}
+
 final readonly class PreparedUserPayload
 {
     public function __construct(
@@ -403,6 +467,21 @@ final class ContextFormController
     public function __invoke(ContextAwareSkirRequest $request, SkirContext $context): PreparedUserPayload
     {
         self::$originalTransportPayload = $context->request->json()->all();
+
+        /** @var PreparedUserPayload $payload */
+        $payload = $request->skir();
+
+        return $payload;
+    }
+}
+
+final class UnauthorizedFormController
+{
+    public static int $invocations = 0;
+
+    public function __invoke(UnauthorizedSkirRequest $request): PreparedUserPayload
+    {
+        self::$invocations++;
 
         /** @var PreparedUserPayload $payload */
         $payload = $request->skir();
