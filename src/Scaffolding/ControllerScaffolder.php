@@ -170,9 +170,20 @@ final class ControllerScaffolder
             throw $exception;
         }
 
+        $cleanupWarnings = [];
+
         foreach ($replacementBackups as $backupPath) {
-            $this->filesystem->remove($backupPath);
+            try {
+                $this->filesystem->remove($backupPath);
+            } catch (Throwable $exception) {
+                $cleanupWarnings[] = "Controller changes were committed, but displaced backup [{$backupPath}] could not be removed: {$exception->getMessage()}";
+            }
         }
+
+        $warnings = array_merge(...array_map(
+            static fn (RenderedController $controller): array => $controller->warnings,
+            $renderedControllers,
+        ));
 
         return new ControllerScaffoldingResult(
             $createdPaths,
@@ -182,10 +193,7 @@ final class ControllerScaffolder
                 $renderedControllers,
             )),
             $updatedPaths,
-            array_merge(...array_map(
-                static fn (RenderedController $controller): array => $controller->warnings,
-                $renderedControllers,
-            )),
+            array_merge($warnings, $cleanupWarnings),
         );
     }
 
@@ -595,12 +603,30 @@ final class ControllerScaffolder
             if ($destination === null || ! $staged->matches($destination)) {
                 throw SkirScaffoldingException::rollbackArtifactChanged($rendered->destinationPath);
             }
+        } catch (Throwable $exception) {
+            if ($published && $staged !== null) {
+                try {
+                    $this->undoUnjournaledCreation($rendered->destinationPath, $staged);
+                } catch (Throwable $rollbackException) {
+                    throw SkirScaffoldingException::transactionRollbackFailed($exception, $rollbackException);
+                }
+            }
+
+            throw $exception;
         } finally {
             try {
                 $this->filesystem->remove($temporaryPath);
             } catch (SkirScaffoldingException $exception) {
                 if ($published && $staged !== null) {
-                    $this->filesystem->removeIfUnchanged($rendered->destinationPath, $staged);
+                    try {
+                        $this->undoUnjournaledCreation($rendered->destinationPath, $staged);
+                        $this->filesystem->remove($temporaryPath);
+                    } catch (Throwable $rollbackException) {
+                        throw SkirScaffoldingException::transactionRollbackFailed(
+                            $exception,
+                            $rollbackException,
+                        );
+                    }
 
                     throw ($request
                         ? SkirScaffoldingException::cleanupFailedAfterPublication(
@@ -620,6 +646,19 @@ final class ControllerScaffolder
         }
 
         return $staged;
+    }
+
+    private function undoUnjournaledCreation(string $path, FileSnapshot $published): void
+    {
+        if (! $this->filesystem->exists($path)) {
+            return;
+        }
+
+        if ($this->filesystem->removeIfUnchanged($path, $published)) {
+            return;
+        }
+
+        throw SkirScaffoldingException::rollbackArtifactChanged($path);
     }
 
     /**
@@ -644,6 +683,9 @@ final class ControllerScaffolder
         $directory = dirname($rendered->destinationPath);
         $temporaryPath = $this->filesystem->temporaryFile($directory);
         $backupPath = null;
+        $staged = null;
+        $displaced = false;
+        $published = false;
 
         try {
             $this->filesystem->write($temporaryPath, $rendered->source);
@@ -655,41 +697,24 @@ final class ControllerScaffolder
             }
 
             $backupPath = $this->filesystem->displaceToBackup($rendered->destinationPath);
-            $displaced = $this->filesystem->snapshot($backupPath);
+            $displaced = true;
+            $displacedSnapshot = $this->filesystem->snapshot($backupPath);
 
-            if ($displaced === null || ! $original->matches($displaced)) {
-                $this->restoreOrDiscardDisplaced($backupPath, $rendered->destinationPath);
-
+            if ($displacedSnapshot === null || ! $original->matches($displacedSnapshot)) {
                 throw SkirScaffoldingException::controllerChangedDuringScaffolding($rendered->destinationPath);
             }
 
-            $published = false;
+            $this->publisher->publish(
+                $temporaryPath,
+                $rendered->destinationPath,
+                SkirScaffoldingException::existingController(...),
+                SkirScaffoldingException::controllerAtomicPublicationUnavailable(...),
+            );
+            $published = true;
+            $destination = $this->filesystem->snapshot($rendered->destinationPath);
 
-            try {
-                $this->publisher->publish(
-                    $temporaryPath,
-                    $rendered->destinationPath,
-                    SkirScaffoldingException::existingController(...),
-                    SkirScaffoldingException::controllerAtomicPublicationUnavailable(...),
-                );
-                $published = true;
-                $destination = $this->filesystem->snapshot($rendered->destinationPath);
-
-                if ($destination === null || ! $staged->matches($destination)) {
-                    throw SkirScaffoldingException::rollbackArtifactChanged($rendered->destinationPath);
-                }
-            } catch (Throwable $exception) {
-                if ($published && $this->filesystem->removeIfUnchanged($rendered->destinationPath, $staged)) {
-                    if (! $this->filesystem->restoreBackup($backupPath, $rendered->destinationPath)) {
-                        throw SkirScaffoldingException::rollbackArtifactChanged($rendered->destinationPath);
-                    }
-
-                    throw $exception;
-                }
-
-                $this->restoreOrDiscardDisplaced($backupPath, $rendered->destinationPath);
-
-                throw $exception;
+            if ($destination === null || ! $staged->matches($destination)) {
+                throw SkirScaffoldingException::rollbackArtifactChanged($rendered->destinationPath);
             }
 
             return new ControllerReplacement(
@@ -697,8 +722,42 @@ final class ControllerScaffolder
                 $backupPath,
                 $staged,
             );
+        } catch (Throwable $exception) {
+            if ($displaced && $backupPath !== null) {
+                try {
+                    if ($published && $staged !== null) {
+                        $this->undoPublishedReplacement($rendered->destinationPath, $staged);
+                    }
+
+                    $this->restoreDisplacedOriginal($backupPath, $rendered->destinationPath);
+                } catch (Throwable $rollbackException) {
+                    throw SkirScaffoldingException::transactionRollbackFailed($exception, $rollbackException);
+                }
+            }
+
+            throw $exception;
         } finally {
-            $this->filesystem->remove($temporaryPath);
+            try {
+                $this->filesystem->remove($temporaryPath);
+            } catch (Throwable $cleanupException) {
+                if ($published && $backupPath !== null && $staged !== null) {
+                    try {
+                        $this->rollbackReplacement(new ControllerReplacement(
+                            $rendered->destinationPath,
+                            $backupPath,
+                            $staged,
+                        ));
+                        $this->filesystem->remove($temporaryPath);
+                    } catch (Throwable $rollbackException) {
+                        throw SkirScaffoldingException::transactionRollbackFailed(
+                            $cleanupException,
+                            $rollbackException,
+                        );
+                    }
+                }
+
+                throw $cleanupException;
+            }
         }
     }
 
@@ -708,28 +767,49 @@ final class ControllerScaffolder
             $replacement->destinationPath,
             $replacement->published,
         )) {
-            $this->filesystem->remove($replacement->backupPath);
-
-            throw SkirScaffoldingException::rollbackArtifactChanged($replacement->destinationPath);
+            throw SkirScaffoldingException::displacedControllerPreserved(
+                $replacement->destinationPath,
+                $replacement->backupPath,
+            );
         }
 
         if (! $this->filesystem->restoreBackup(
             $replacement->backupPath,
             $replacement->destinationPath,
         )) {
-            throw SkirScaffoldingException::rollbackArtifactChanged($replacement->destinationPath);
+            throw SkirScaffoldingException::displacedControllerPreserved(
+                $replacement->destinationPath,
+                $replacement->backupPath,
+            );
         }
     }
 
-    private function restoreOrDiscardDisplaced(string $backupPath, string $destinationPath): void
+    private function undoPublishedReplacement(string $destinationPath, FileSnapshot $published): void
     {
-        if ($this->filesystem->exists($destinationPath)) {
-            $this->filesystem->remove($backupPath);
-
+        if (! $this->filesystem->exists($destinationPath)) {
             return;
         }
 
-        if ($this->filesystem->restoreBackup($backupPath, $destinationPath)) {
+        if ($this->filesystem->removeIfUnchanged($destinationPath, $published)) {
+            return;
+        }
+
+        throw SkirScaffoldingException::rollbackArtifactChanged($destinationPath);
+    }
+
+    private function restoreDisplacedOriginal(string $backupPath, string $destinationPath): void
+    {
+        if (! $this->filesystem->exists($destinationPath)) {
+            if ($this->filesystem->restoreBackup($backupPath, $destinationPath)) {
+                return;
+            }
+        }
+
+        if ($this->filesystem->exists($backupPath)) {
+            throw SkirScaffoldingException::displacedControllerPreserved($destinationPath, $backupPath);
+        }
+
+        if ($this->filesystem->exists($destinationPath)) {
             return;
         }
 

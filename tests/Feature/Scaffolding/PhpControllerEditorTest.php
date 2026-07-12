@@ -246,7 +246,7 @@ PHP;
             module: 'Other',
             name: 'OtherName',
             enumClass: 'app\skir\methods\adminmethod',
-            enumCase: 'getuser',
+            enumCase: 'GetUser',
             phpMethod: 'otherName',
             requestType: 'void',
             requestClass: null,
@@ -265,6 +265,36 @@ PHP;
             [$this->method(), $duplicate],
             [],
         );
+    }
+
+    #[Test]
+    public function selected_enum_case_names_remain_case_sensitive(): void
+    {
+        $source = "<?php\n\nnamespace App\\Skir\\Admin;\n\nfinal class AdminController\n{\n}\n";
+        $otherCase = new SkirMethodDefinition(
+            module: 'Other',
+            name: 'OtherName',
+            enumClass: 'app\skir\methods\adminmethod',
+            enumCase: 'getuser',
+            phpMethod: 'otherName',
+            requestType: 'void',
+            requestClass: null,
+            responseType: 'void',
+            responseClass: null,
+        );
+
+        $result = app(PhpControllerEditor::class)->edit(
+            $source,
+            '/app/Skir/Admin/AdminController.php',
+            'App\Skir\Admin',
+            'AdminController',
+            [$this->method(), $otherCase],
+            [],
+        );
+
+        self::assertTrue($result->changed);
+        self::assertStringContainsString('AdminMethod::GetUser', $result->source);
+        self::assertStringContainsString('AdminMethod::getuser', $result->source);
     }
 
     private function method(): SkirMethodDefinition

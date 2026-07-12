@@ -367,7 +367,7 @@ final class PhpControllerEditor
         $selected = [];
 
         foreach ($methods as $method) {
-            $key = strtolower($method->enumClass.'::'.$method->enumCase);
+            $key = strtolower($method->enumClass).'::'.$method->enumCase;
 
             if (isset($selected[$key])) {
                 throw SkirScaffoldingException::duplicateControllerSelectionIdentity(

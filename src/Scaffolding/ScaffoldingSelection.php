@@ -37,7 +37,7 @@ final readonly class ScaffoldingSelection
             }
 
             $selectedMethodIds[$method->id()] = true;
-            $identityKey = strtolower($method->enumClass.'::'.$method->enumCase);
+            $identityKey = strtolower($method->enumClass).'::'.$method->enumCase;
 
             if (isset($selectedIdentities[$identityKey])) {
                 throw SkirScaffoldingException::duplicateControllerSelectionIdentity(

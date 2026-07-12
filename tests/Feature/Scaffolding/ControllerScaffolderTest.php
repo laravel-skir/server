@@ -102,10 +102,27 @@ final class ControllerScaffolderTest extends TestCase
                 module: 'Other.Module',
                 name: 'OtherName',
                 enumClass: 'app\skir\methods\adminusersmethod',
+                enumCase: 'GetUser',
+                phpMethod: 'otherName',
+            ),
+        ], ControllerStyle::Single, null, false);
+    }
+
+    #[Test]
+    public function enum_case_names_remain_case_sensitive_for_selected_identities(): void
+    {
+        $selection = new ScaffoldingSelection([
+            $this->method(),
+            $this->method(
+                module: 'Other.Module',
+                name: 'OtherName',
+                enumClass: 'app\skir\methods\adminusersmethod',
                 enumCase: 'getuser',
                 phpMethod: 'otherName',
             ),
         ], ControllerStyle::Single, null, false);
+
+        self::assertCount(2, $selection->methods);
     }
 
     #[Test]
@@ -1428,10 +1445,318 @@ PHP;
                 false,
             ));
             self::fail('The atomic-save winner should prevent publication.');
-        } catch (SkirScaffoldingException) {
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('preserved at', $exception->getMessage());
         }
 
         self::assertSame('<?php // atomic-save winner', file_get_contents($controllerPath));
+        self::assertCount(1, glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function a_null_destination_snapshot_after_creation_leaves_no_unjournaled_file(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($controllerPath): void {
+                if ($operation === 'snapshot' && $path === $controllerPath) {
+                    unlink($controllerPath);
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('The missing post-publication snapshot should fail.');
+        } catch (SkirScaffoldingException) {
+        }
+
+        self::assertFileDoesNotExist($controllerPath);
+        self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function a_throwing_destination_snapshot_after_creation_rolls_back_before_journaling(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($controllerPath): void {
+                if ($operation === 'snapshot' && $path === $controllerPath) {
+                    throw new RuntimeException('Simulated destination snapshot failure.');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('The throwing snapshot should fail.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('Simulated destination snapshot failure.', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($controllerPath);
+        self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function failed_prejournal_removal_preserves_the_concurrent_edit_and_reports_rollback_failure(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($controllerPath): void {
+                if ($operation === 'snapshot' && $path === $controllerPath) {
+                    throw new RuntimeException('Simulated destination snapshot failure.');
+                }
+
+                if ($operation === 'removeIfUnchanged' && $path === $controllerPath) {
+                    file_put_contents($controllerPath, '<?php // concurrent edit before rollback');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('Unsafe pre-journal rollback should be reported.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('could not be rolled back safely', $exception->getMessage());
+        }
+
+        self::assertSame('<?php // concurrent edit before rollback', file_get_contents($controllerPath));
+    }
+
+    #[Test]
+    public function a_throwing_displaced_backup_snapshot_restores_the_original(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        $original = "<?php\n\nnamespace App\\Skir\\Admin\\Users;\n\nfinal class UsersController\n{\n}\n";
+        file_put_contents($controllerPath, $original);
+        $stagedSnapshots = 0;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use (&$stagedSnapshots): void {
+                if ($operation !== 'snapshot' || ! str_contains(basename($path), '.skir-')) {
+                    return;
+                }
+
+                $stagedSnapshots++;
+
+                if ($stagedSnapshots === 2) {
+                    throw new RuntimeException('Simulated backup snapshot failure.');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('The backup snapshot should fail.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('Simulated backup snapshot failure.', $exception->getMessage());
+        }
+
+        self::assertSame($original, file_get_contents($controllerPath));
+        self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function a_restore_conflict_reports_the_preserved_displaced_original_path(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        file_put_contents($controllerPath, "<?php\n\nnamespace App\\Skir\\Admin\\Users;\n\nfinal class UsersController\n{\n}\n");
+        $stagedSnapshots = 0;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use ($controllerPath, &$stagedSnapshots): void {
+                if ($operation === 'snapshot' && str_contains(basename($path), '.skir-')) {
+                    $stagedSnapshots++;
+
+                    if ($stagedSnapshots === 2) {
+                        throw new RuntimeException('Simulated backup snapshot failure.');
+                    }
+                }
+
+                if ($operation === 'restoreBackup') {
+                    file_put_contents($controllerPath, '<?php // restore conflict');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('The restoration conflict should fail.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('preserved at', $exception->getMessage());
+        }
+
+        self::assertSame('<?php // restore conflict', file_get_contents($controllerPath));
+        self::assertCount(1, glob(dirname($controllerPath).'/.skir-*') ?: []);
+    }
+
+    #[Test]
+    public function committed_backup_cleanup_attempts_every_backup_and_returns_warnings(): void
+    {
+        $adminPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        $billingPath = $this->temporaryDirectory.'/app/Skir/Billing/Invoices/InvoicesController.php';
+        mkdir(dirname($adminPath), 0777, true);
+        mkdir(dirname($billingPath), 0777, true);
+        file_put_contents($adminPath, "<?php\n\nnamespace App\\Skir\\Admin\\Users;\n\nfinal class UsersController\n{\n}\n");
+        file_put_contents($billingPath, "<?php\n\nnamespace App\\Skir\\Billing\\Invoices;\n\nfinal class InvoicesController\n{\n}\n");
+        $failedBackup = null;
+        $removedBackups = [];
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use (&$failedBackup, &$removedBackups): void {
+                if ($operation !== 'remove' || ! is_file($path) || ! str_contains($path, '/app/Skir/')) {
+                    return;
+                }
+
+                $contents = file_get_contents($path);
+
+                if (! is_string($contents) || ! str_contains($contents, 'final class') || str_contains($contents, 'SkirMethod')) {
+                    return;
+                }
+
+                if ($failedBackup === null) {
+                    $failedBackup = $path;
+
+                    throw new RuntimeException('Simulated committed backup cleanup failure.');
+                }
+
+                $removedBackups[] = $path;
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        $result = $scaffolder->scaffold(new ScaffoldingSelection([
+            $this->method(),
+            $this->method(
+                module: 'Billing.Invoices',
+                name: 'GetInvoice',
+                enumClass: 'App\Skir\Methods\BillingMethod',
+                enumCase: 'GetInvoice',
+                phpMethod: 'getInvoice',
+            ),
+        ], ControllerStyle::Module, null, false));
+
+        self::assertNotNull($failedBackup);
+        self::assertCount(1, $removedBackups);
+        self::assertFileExists($failedBackup);
+        self::assertFileDoesNotExist($removedBackups[0]);
+        self::assertCount(1, $result->warnings);
+        self::assertStringContainsString('changes were committed', $result->warnings[0]);
+        self::assertStringContainsString('function getUser(', (string) file_get_contents($adminPath));
+        self::assertStringContainsString('function getInvoice(', (string) file_get_contents($billingPath));
+    }
+
+    #[Test]
+    public function replacement_temp_cleanup_failure_restores_the_original_before_reporting(): void
+    {
+        $controllerPath = $this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php';
+        mkdir(dirname($controllerPath), 0777, true);
+        $original = "<?php\n\nnamespace App\\Skir\\Admin\\Users;\n\nfinal class UsersController\n{\n}\n";
+        file_put_contents($controllerPath, $original);
+        $failedCleanup = false;
+        $filesystem = new ScaffoldingFilesystem(
+            static function (string $operation, string $path) use (&$failedCleanup): void {
+                if ($failedCleanup || $operation !== 'remove' || ! is_file($path) || ! str_contains($path, '/app/Skir/')) {
+                    return;
+                }
+
+                $contents = file_get_contents($path);
+
+                if (is_string($contents) && str_contains($contents, 'SkirMethod')) {
+                    $failedCleanup = true;
+
+                    throw new RuntimeException('Simulated replacement temp cleanup failure.');
+                }
+            },
+        );
+        $publisher = new AtomicFilePublisher($filesystem);
+        $scaffolder = new ControllerScaffolder(
+            $publisher,
+            $filesystem,
+            new FormRequestScaffolder($publisher, $filesystem),
+            new PhpSourceValidator($filesystem),
+        );
+
+        try {
+            $scaffolder->scaffold(new ScaffoldingSelection(
+                [$this->method()],
+                ControllerStyle::Module,
+                null,
+                false,
+            ));
+            self::fail('The temp cleanup failure should abort the replacement.');
+        } catch (SkirScaffoldingException $exception) {
+            self::assertStringContainsString('Simulated replacement temp cleanup failure.', $exception->getMessage());
+        }
+
+        self::assertTrue($failedCleanup);
+        self::assertSame($original, file_get_contents($controllerPath));
         self::assertSame([], glob(dirname($controllerPath).'/.skir-*') ?: []);
     }
 

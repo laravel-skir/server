@@ -184,7 +184,15 @@ final class ScaffoldingFilesystem
 
     public function restoreBackup(string $backupPath, string $destinationPath): bool
     {
-        if (! @link($backupPath, $destinationPath)) {
+        $restored = $this->run('restoreBackup', $destinationPath, static function () use ($backupPath, $destinationPath): bool {
+            if (file_exists($destinationPath) || is_link($destinationPath)) {
+                return false;
+            }
+
+            return link($backupPath, $destinationPath);
+        });
+
+        if ($restored !== true) {
             return false;
         }
 

@@ -98,6 +98,15 @@ final class SkirScaffoldingException extends RuntimeException
         return new self("Scaffolding artifact [{$path}] changed after publication and could not be rolled back safely.");
     }
 
+    public static function displacedControllerPreserved(
+        string $destinationPath,
+        string $backupPath,
+    ): self {
+        return new self(
+            "Skir controller [{$destinationPath}] could not be restored without clobbering another write. Its displaced original is preserved at [{$backupPath}].",
+        );
+    }
+
     public static function invalidControllerNamespace(mixed $namespace): self
     {
         $displayNamespace = is_scalar($namespace) ? (string) $namespace : get_debug_type($namespace);
