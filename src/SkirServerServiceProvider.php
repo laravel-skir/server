@@ -9,9 +9,14 @@ use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 use Skir\Server\Codecs\DenseJsonCodec;
 use Skir\Server\Codecs\SkirCodec;
+use Skir\Server\Commands\GeneratorRunner;
+use Skir\Server\Commands\MakeSkirCommand;
 use Skir\Server\Commands\MakeSkirRequestCommand;
+use Skir\Server\Commands\SymfonyGeneratorRunner;
 use Skir\Server\Http\Controllers\SkirRpcController;
 use Skir\Server\Routing\SkirRouteDefinition;
+use Skir\Server\Scaffolding\ControllerScaffolder;
+use Skir\Server\Scaffolding\ControllerScaffolding;
 use Skir\Server\Scaffolding\Manifest\ManifestRepository;
 
 final class SkirServerServiceProvider extends ServiceProvider
@@ -35,6 +40,8 @@ final class SkirServerServiceProvider extends ServiceProvider
         $this->app->singleton(SkirCodec::class, DenseJsonCodec::class);
         $this->app->singleton(SkirServer::class);
         $this->app->singleton(ManifestRepository::class);
+        $this->app->bind(GeneratorRunner::class, SymfonyGeneratorRunner::class);
+        $this->app->bind(ControllerScaffolding::class, ControllerScaffolder::class);
     }
 
     public function boot(): void
@@ -45,6 +52,7 @@ final class SkirServerServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([
+                MakeSkirCommand::class,
                 MakeSkirRequestCommand::class,
             ]);
         }

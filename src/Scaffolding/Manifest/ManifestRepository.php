@@ -32,6 +32,12 @@ final class ManifestRepository
         return $this->modules ?? [];
     }
 
+    public function reload(): void
+    {
+        $this->methods = null;
+        $this->modules = null;
+    }
+
     private function load(): void
     {
         if ($this->methods !== null) {

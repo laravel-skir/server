@@ -9,7 +9,7 @@ use Skir\Server\Exceptions\SkirScaffoldingException;
 use Skir\Server\Scaffolding\Manifest\SkirMethodDefinition;
 use Throwable;
 
-final class ControllerScaffolder
+final class ControllerScaffolder implements ControllerScaffolding
 {
     private readonly ControllerMethodRenderer $methodRenderer;
 

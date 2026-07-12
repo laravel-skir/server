@@ -12,6 +12,7 @@ return [
     'scaffolding' => [
         'controller_style' => 'module',
         'controller_namespace' => 'App\\Skir',
+        'single_controller' => 'App\\Skir\\SkirController',
         'request_namespace' => 'App\\Http\\Requests\\Skir',
         'form_requests' => true,
     ],
