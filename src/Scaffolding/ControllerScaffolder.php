@@ -15,6 +15,8 @@ final class ControllerScaffolder implements ControllerScaffolding
 
     private readonly PhpControllerEditor $controllerEditor;
 
+    private readonly ControllerClassValidator $controllerClassValidator;
+
     public function __construct(
         private readonly AtomicFilePublisher $publisher,
         private readonly ScaffoldingFilesystem $filesystem,
@@ -22,12 +24,14 @@ final class ControllerScaffolder implements ControllerScaffolding
         private readonly PhpSourceValidator $sourceValidator,
         ?ControllerMethodRenderer $methodRenderer = null,
         ?PhpControllerEditor $controllerEditor = null,
+        ?ControllerClassValidator $controllerClassValidator = null,
     ) {
         $this->methodRenderer = $methodRenderer ?? new ControllerMethodRenderer;
         $this->controllerEditor = $controllerEditor ?? new PhpControllerEditor(
             $this->methodRenderer,
             $sourceValidator,
         );
+        $this->controllerClassValidator = $controllerClassValidator ?? new ControllerClassValidator;
     }
 
     public function scaffold(ScaffoldingSelection $selection): ControllerScaffoldingResult
@@ -515,18 +519,7 @@ final class ControllerScaffolder implements ControllerScaffolding
             return $this->controllerNamespace().'\\SkirController';
         }
 
-        $controller = str_contains($configuredController, '\\')
-            ? trim($configuredController, '\\')
-            : $this->controllerNamespace()."\\{$configuredController}";
-
-        try {
-            $this->validateClassReference($controller, 'singleController');
-            $this->validateApplicationNamespace($controller);
-        } catch (SkirScaffoldingException) {
-            throw SkirScaffoldingException::invalidSingleController($configuredController);
-        }
-
-        return $controller;
+        return $this->controllerClassValidator->resolve($configuredController);
     }
 
     private function validateApplicationNamespace(string $namespace): void

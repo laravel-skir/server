@@ -6,6 +6,7 @@ namespace Skir\Server\Tests\Feature\Commands;
 
 use Closure;
 use Skir\Server\Commands\GeneratorRunner;
+use Skir\Server\Commands\SymfonyGeneratorRunner;
 use Skir\Server\Scaffolding\ControllerScaffolding;
 use Skir\Server\Scaffolding\ControllerScaffoldingResult;
 use Skir\Server\Scaffolding\RouteRegistration;
@@ -160,18 +161,27 @@ final class MakeSkirCommandTest extends TestCase
         self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
     }
 
-    public function test_unknown_selector_is_rejected_before_generator_when_current_manifests_are_readable(): void
+    public function test_generator_can_introduce_the_selected_method_before_fresh_manifest_validation(): void
     {
-        $runner = new RecordingGeneratorRunner;
+        $runner = new RecordingGeneratorRunner(function (): void {
+            $this->writeManifest([
+                ...$this->defaultModules(),
+                $this->module('Generated.Reports', 'App\\Skir\\ReportMethod', [
+                    $this->method('Export', 'Export', null),
+                ]),
+            ]);
+        });
         $this->app->instance(GeneratorRunner::class, $runner);
 
         $this->artisan('skir:make', [
             '--generate' => true,
-            '--method' => ['Missing.Method'],
+            '--method' => ['Generated.Reports.Export'],
+            '--without-requests' => true,
             '--no-interaction' => true,
-        ])->expectsOutputToContain('Unknown Skir method')->assertFailed();
+        ])->assertSuccessful();
 
-        self::assertSame([], $runner->commands);
+        self::assertCount(1, $runner->commands);
+        self::assertFileExists($this->temporaryDirectory.'/app/Skir/Generated/Reports/ReportsController.php');
     }
 
     public function test_invalid_style_and_controller_combinations_fail_without_writing(): void
@@ -190,6 +200,24 @@ final class MakeSkirCommandTest extends TestCase
         ])->expectsOutputToContain('only be used with')->assertFailed();
 
         self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
+    }
+
+    public function test_invalid_custom_controller_is_rejected_before_generator_execution(): void
+    {
+        foreach (['', 'Domain\\EscapedController', 'App\\Rpc\\../EscapedController'] as $controller) {
+            $runner = new RecordingGeneratorRunner;
+            $this->app->instance(GeneratorRunner::class, $runner);
+
+            $this->artisan('skir:make', [
+                '--generate' => true,
+                '--all' => true,
+                '--style' => 'single',
+                '--controller' => $controller,
+                '--no-interaction' => true,
+            ])->expectsOutputToContain('Single Skir controller')->assertFailed();
+
+            self::assertSame([], $runner->commands);
+        }
     }
 
     public function test_generate_runs_configured_argv_from_base_path_without_a_timeout_and_reloads_manifests(): void
@@ -255,6 +283,22 @@ final class MakeSkirCommandTest extends TestCase
         self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
     }
 
+    public function test_generator_failure_does_not_load_an_invalid_stale_manifest(): void
+    {
+        file_put_contents($this->manifestPath(), 'invalid stale manifest');
+        $runner = new RecordingGeneratorRunner(exitCode: 9);
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--method' => ['Generated.Later'],
+            '--no-interaction' => true,
+        ])->expectsOutputToContain('failed with exit code [9]')->assertExitCode(9);
+
+        self::assertCount(1, $runner->commands);
+        self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
+    }
+
     public function test_generator_configuration_must_be_a_non_empty_argv_list(): void
     {
         $runner = new RecordingGeneratorRunner;
@@ -314,7 +358,10 @@ final class MakeSkirCommandTest extends TestCase
 
     public function test_interactive_confirmation_can_abort_without_writing(): void
     {
-        $this->artisan('skir:make')
+        $runner = new RecordingGeneratorRunner;
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', ['--generate' => true])
             ->expectsChoice('Select Skir modules or methods', ['method:Admin.Users.GetUser'], [
                 'module:Admin.Users' => 'Module: Admin.Users',
                 'module:Status.Health' => 'Module: Status.Health',
@@ -329,10 +376,77 @@ final class MakeSkirCommandTest extends TestCase
             ])
             ->expectsConfirmation('Generate form requests?', 'yes')
             ->expectsConfirmation('Create these files?', 'no')
-            ->expectsOutputToContain('Scaffolding cancelled')
+            ->expectsOutputToContain('No controller or request files were written')
             ->assertSuccessful();
 
         self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
+        self::assertCount(1, $runner->commands);
+    }
+
+    public function test_all_and_repeated_module_selectors_scaffold_each_method_once(): void
+    {
+        $this->artisan('skir:make', [
+            '--module' => ['Admin.Users', 'Admin.Users'],
+            '--style' => 'module',
+            '--without-requests' => true,
+            '--no-interaction' => true,
+        ])->assertSuccessful();
+
+        $source = file_get_contents($this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php');
+        self::assertIsString($source);
+        self::assertSame(1, substr_count($source, 'function getUser('));
+        self::assertSame(1, substr_count($source, 'function deleteUser('));
+
+        $this->removeDirectory($this->temporaryDirectory.'/app');
+
+        $this->artisan('skir:make', [
+            '--all' => true,
+            '--style' => 'module',
+            '--without-requests' => true,
+            '--no-interaction' => true,
+        ])->assertSuccessful();
+
+        self::assertFileExists($this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php');
+        self::assertFileExists($this->temporaryDirectory.'/app/Skir/Status/Health/HealthController.php');
+    }
+
+    public function test_interactive_single_controller_entry_is_used(): void
+    {
+        $this->artisan('skir:make')
+            ->expectsChoice('Select Skir modules or methods', ['method:Admin.Users.GetUser'], [
+                'module:Admin.Users' => 'Module: Admin.Users',
+                'module:Status.Health' => 'Module: Status.Health',
+                'method:Admin.Users.GetUser' => 'Method: Admin.Users.GetUser',
+                'method:Admin.Users.DeleteUser' => 'Method: Admin.Users.DeleteUser',
+                'method:Status.Health.Ping' => 'Method: Status.Health.Ping',
+            ])
+            ->expectsChoice('Controller style', 'single', [
+                'module' => 'One controller per module',
+                'invokable' => 'One invokable controller per method',
+                'single' => 'One controller for this selection',
+            ])
+            ->expectsQuestion('Single controller class', 'App\\Rpc\\InteractiveController')
+            ->expectsConfirmation('Generate form requests?', 'no')
+            ->expectsConfirmation('Create these files?', 'yes')
+            ->assertSuccessful();
+
+        self::assertFileExists($this->temporaryDirectory.'/app/Rpc/InteractiveController.php');
+    }
+
+    public function test_symfony_generator_runner_streams_output_and_returns_the_process_status(): void
+    {
+        $output = '';
+        $status = (new SymfonyGeneratorRunner)->run(
+            [PHP_BINARY, '-r', 'fwrite(STDOUT, "generated"); exit(4);'],
+            $this->temporaryDirectory,
+            null,
+            static function (string $type, string $buffer) use (&$output): void {
+                $output .= $buffer;
+            },
+        );
+
+        self::assertSame(4, $status);
+        self::assertSame('generated', $output);
     }
 
     /** @return list<array<string, mixed>> */

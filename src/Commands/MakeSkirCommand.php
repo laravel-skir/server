@@ -7,6 +7,7 @@ namespace Skir\Server\Commands;
 use Illuminate\Console\Command;
 use InvalidArgumentException;
 use Skir\Server\Exceptions\SkirScaffoldingException;
+use Skir\Server\Scaffolding\ControllerClassValidator;
 use Skir\Server\Scaffolding\ControllerScaffolding;
 use Skir\Server\Scaffolding\ControllerScaffoldingResult;
 use Skir\Server\Scaffolding\ControllerStyle;
@@ -38,6 +39,7 @@ final class MakeSkirCommand extends Command
         private readonly ManifestRepository $manifests,
         private readonly ControllerScaffolding $scaffolder,
         private readonly GeneratorRunner $generator,
+        private readonly ControllerClassValidator $controllerClassValidator,
     ) {
         parent::__construct();
     }
@@ -59,7 +61,9 @@ final class MakeSkirCommand extends Command
 
             if ($this->input->isInteractive()) {
                 if (! confirm('Create these files?', default: true)) {
-                    $this->components->info('Scaffolding cancelled. No files were changed.');
+                    $this->components->info(
+                        'Scaffolding cancelled. No controller or request files were written; the generator may have updated definitions or manifests.',
+                    );
 
                     return self::SUCCESS;
                 }
@@ -103,45 +107,16 @@ final class MakeSkirCommand extends Command
         $style = $this->configuredStyle();
         $controller = $this->option('controller');
 
-        if (is_string($controller) && trim($controller) !== '' && $style !== ControllerStyle::Single) {
-            throw new InvalidArgumentException('Option [--controller] may only be used with the [single] controller style.');
+        if (is_string($controller)) {
+            if ($style !== ControllerStyle::Single) {
+                throw new InvalidArgumentException('Option [--controller] may only be used with the [single] controller style.');
+            }
+
+            $this->controllerClassValidator->resolve($controller);
         }
 
         if ($this->option('generate')) {
             $this->generatorCommand();
-            $this->validateSelectorsAgainstReadableManifests($modules, $methods);
-        }
-    }
-
-    /**
-     * @param  list<string>  $moduleSelectors
-     * @param  list<string>  $methodSelectors
-     */
-    private function validateSelectorsAgainstReadableManifests(
-        array $moduleSelectors,
-        array $methodSelectors,
-    ): void {
-        $manifestPaths = config('skir-server.manifests');
-
-        if (! is_array($manifestPaths) || $manifestPaths === []) {
-            return;
-        }
-
-        foreach ($manifestPaths as $manifestPath) {
-            if (! is_string($manifestPath) || ! is_file($manifestPath) || ! is_readable($manifestPath)) {
-                return;
-            }
-        }
-
-        $modules = $this->manifests->modules();
-        $methods = $this->manifests->methods();
-
-        foreach ($moduleSelectors as $selector) {
-            $this->resolveModule($selector, $modules);
-        }
-
-        foreach ($methodSelectors as $selector) {
-            $this->resolveMethod($selector, $methods);
         }
     }
 
@@ -378,7 +353,7 @@ final class MakeSkirCommand extends Command
         $option = $this->option('controller');
 
         if (is_string($option) && trim($option) !== '') {
-            return $option;
+            return $this->controllerClassValidator->resolve($option);
         }
 
         $configured = config('skir-server.scaffolding.single_controller', 'App\\Skir\\SkirController');
@@ -393,11 +368,13 @@ final class MakeSkirCommand extends Command
             return $configured;
         }
 
-        return text(
+        $controller = text(
             label: 'Single controller class',
             default: $configured,
             required: true,
         );
+
+        return $this->controllerClassValidator->resolve($controller);
     }
 
     /** @param list<SkirMethodDefinition> $methods */
