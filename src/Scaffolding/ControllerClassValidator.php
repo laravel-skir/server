@@ -19,7 +19,7 @@ final class ControllerClassValidator
 
         $controller = str_contains($configuredController, '\\')
             ? trim($configuredController, '\\')
-            : $this->controllerNamespace()."\\{$configuredController}";
+            : $this->resolveControllerNamespace()."\\{$configuredController}";
 
         try {
             $this->validateClassReference($controller);
@@ -32,21 +32,29 @@ final class ControllerClassValidator
         return $controller;
     }
 
-    private function controllerNamespace(): string
+    public function resolveControllerNamespace(): string
     {
         $configuredNamespace = config('skir-server.scaffolding.controller_namespace');
 
         if (! is_string($configuredNamespace)) {
-            throw SkirScaffoldingException::invalidSingleController(get_debug_type($configuredNamespace));
+            throw SkirScaffoldingException::invalidControllerNamespace($configuredNamespace);
         }
 
         $namespace = trim($configuredNamespace, '\\');
 
         try {
             $this->validateClassReference($namespace);
-            $this->validateApplicationNamespace($namespace);
-        } catch (SkirScaffoldingException) {
-            throw SkirScaffoldingException::invalidSingleController($configuredNamespace);
+            (new ParserFactory)->createForHostVersion()->parse("<?php namespace {$namespace};");
+        } catch (Throwable) {
+            throw SkirScaffoldingException::invalidControllerNamespace($configuredNamespace);
+        }
+
+        $namespaceSegments = explode('\\', $namespace);
+        $applicationNamespace = $this->applicationNamespace();
+        $applicationSegments = explode('\\', $applicationNamespace);
+
+        if (array_slice($namespaceSegments, 0, count($applicationSegments)) !== $applicationSegments) {
+            throw SkirScaffoldingException::controllerNamespaceOutsideApplication($namespace, $applicationNamespace);
         }
 
         return $namespace;

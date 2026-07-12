@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Skir\Server\Tests\Feature\Commands;
 
 use Closure;
+use RuntimeException;
 use Skir\Server\Commands\GeneratorRunner;
 use Skir\Server\Commands\SymfonyGeneratorRunner;
 use Skir\Server\Scaffolding\ControllerScaffolding;
@@ -220,6 +221,76 @@ final class MakeSkirCommandTest extends TestCase
         }
     }
 
+    public function test_applicable_invalid_scaffolding_configuration_is_rejected_before_generator(): void
+    {
+        $cases = [
+            'default controller style' => [
+                'skir-server.scaffolding.controller_style',
+                'resource',
+                ['--without-requests' => true],
+                'not supported',
+            ],
+            'controller namespace' => [
+                'skir-server.scaffolding.controller_namespace',
+                'Domain\\Skir',
+                ['--style' => 'module', '--without-requests' => true],
+                'controller namespace',
+            ],
+            'request namespace' => [
+                'skir-server.scaffolding.request_namespace',
+                'Domain\\Requests',
+                ['--style' => 'module', '--with-requests' => true],
+                'request_namespace',
+            ],
+            'single controller' => [
+                'skir-server.scaffolding.single_controller',
+                'Domain\\EscapedController',
+                ['--style' => 'single', '--without-requests' => true],
+                'Single Skir controller',
+            ],
+            'form request preference' => [
+                'skir-server.scaffolding.form_requests',
+                'yes',
+                ['--style' => 'module'],
+                'form_requests',
+            ],
+        ];
+
+        foreach ($cases as [$key, $value, $options, $message]) {
+            config()->set($key, $value);
+            $runner = new RecordingGeneratorRunner;
+            $this->app->instance(GeneratorRunner::class, $runner);
+
+            $this->artisan('skir:make', [
+                '--generate' => true,
+                '--all' => true,
+                '--no-interaction' => true,
+                ...$options,
+            ])->expectsOutputToContain($message)->assertFailed();
+
+            self::assertSame([], $runner->commands);
+            config()->set($key, data_get(require dirname(__DIR__, 3).'/config/skir-server.php', substr($key, 12)));
+        }
+    }
+
+    public function test_explicit_flags_override_unused_invalid_request_configuration(): void
+    {
+        config()->set('skir-server.scaffolding.form_requests', 'invalid');
+        config()->set('skir-server.scaffolding.request_namespace', 'Domain\\Invalid');
+        $runner = new RecordingGeneratorRunner;
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--all' => true,
+            '--style' => 'module',
+            '--without-requests' => true,
+            '--no-interaction' => true,
+        ])->assertSuccessful();
+
+        self::assertCount(1, $runner->commands);
+    }
+
     public function test_generate_runs_configured_argv_from_base_path_without_a_timeout_and_reloads_manifests(): void
     {
         unlink($this->manifestPath());
@@ -235,7 +306,7 @@ final class MakeSkirCommandTest extends TestCase
             '--without-requests' => true,
             '--no-interaction' => true,
         ])->expectsOutputToContain('Generating Skir definitions')
-            ->expectsOutputToContain('generator output')
+            ->expectsOutputToContain('<info>raw stdout</info>')
             ->assertSuccessful();
 
         self::assertSame([['bun', 'run', 'skir:generate']], $runner->commands);
@@ -312,6 +383,38 @@ final class MakeSkirCommandTest extends TestCase
         ])->expectsOutputToContain('argument list')->assertFailed();
 
         self::assertSame([], $runner->commands);
+    }
+
+    public function test_generator_configuration_rejects_whitespace_only_arguments(): void
+    {
+        $runner = new RecordingGeneratorRunner;
+        $this->app->instance(GeneratorRunner::class, $runner);
+        config()->set('skir-server.generator_command', ['npx', '   ']);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--all' => true,
+            '--without-requests' => true,
+            '--no-interaction' => true,
+        ])->expectsOutputToContain('non-empty string arguments')->assertFailed();
+
+        self::assertSame([], $runner->commands);
+    }
+
+    public function test_generator_runner_exception_fails_without_loading_manifests_or_scaffolding(): void
+    {
+        file_put_contents($this->manifestPath(), 'invalid stale manifest');
+        $this->app->instance(GeneratorRunner::class, new ThrowingGeneratorRunner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--method' => ['Generated.Later'],
+            '--without-requests' => true,
+            '--no-interaction' => true,
+        ])->expectsOutputToContain('failed to start or run: process unavailable')
+            ->assertFailed();
+
+        self::assertDirectoryDoesNotExist($this->temporaryDirectory.'/app');
     }
 
     public function test_result_categories_warnings_and_structured_routes_are_rendered(): void
@@ -433,6 +536,48 @@ final class MakeSkirCommandTest extends TestCase
         self::assertFileExists($this->temporaryDirectory.'/app/Rpc/InteractiveController.php');
     }
 
+    public function test_controller_option_implies_single_style_without_using_the_configured_style(): void
+    {
+        config()->set('skir-server.scaffolding.controller_style', 'module');
+
+        $this->artisan('skir:make', [
+            '--method' => ['Admin.Users.GetUser'],
+            '--controller' => 'App\\Rpc\\ImpliedSingleController',
+            '--without-requests' => true,
+            '--no-interaction' => true,
+        ])->assertSuccessful();
+
+        self::assertFileExists($this->temporaryDirectory.'/app/Rpc/ImpliedSingleController.php');
+        self::assertFileDoesNotExist($this->temporaryDirectory.'/app/Skir/Admin/Users/UsersController.php');
+    }
+
+    public function test_controller_option_skips_the_interactive_style_and_controller_prompts(): void
+    {
+        $this->artisan('skir:make', [
+            '--method' => ['Admin.Users.GetUser'],
+            '--controller' => 'App\\Rpc\\ExplicitInteractiveController',
+            '--without-requests' => true,
+        ])->expectsConfirmation('Create these files?', 'yes')
+            ->assertSuccessful();
+
+        self::assertFileExists($this->temporaryDirectory.'/app/Rpc/ExplicitInteractiveController.php');
+    }
+
+    public function test_generator_output_is_written_raw_for_stdout_and_stderr(): void
+    {
+        $runner = new RecordingGeneratorRunner;
+        $this->app->instance(GeneratorRunner::class, $runner);
+
+        $this->artisan('skir:make', [
+            '--generate' => true,
+            '--method' => ['Status.Health.Ping'],
+            '--without-requests' => true,
+            '--no-interaction' => true,
+        ])->expectsOutputToContain('<info>raw stdout</info>')
+            ->expectsOutputToContain('<error>raw stderr</error>')
+            ->assertSuccessful();
+    }
+
     public function test_symfony_generator_runner_streams_output_and_returns_the_process_status(): void
     {
         $output = '';
@@ -548,9 +693,18 @@ final class RecordingGeneratorRunner implements GeneratorRunner
         $this->commands[] = $command;
         $this->workingDirectories[] = $workingDirectory;
         $this->timeouts[] = $timeout;
-        $output('out', 'generator output');
+        $output('out', '<info>raw stdout</info>');
+        $output('err', '<error>raw stderr</error>');
         ($this->beforeReturn)?->__invoke();
 
         return $this->exitCode;
+    }
+}
+
+final class ThrowingGeneratorRunner implements GeneratorRunner
+{
+    public function run(array $command, string $workingDirectory, ?float $timeout, Closure $output): int
+    {
+        throw new RuntimeException('process unavailable');
     }
 }

@@ -12,10 +12,15 @@ use Throwable;
 
 final class FormRequestScaffolder
 {
+    private readonly RequestNamespaceValidator $requestNamespaceValidator;
+
     public function __construct(
         private readonly AtomicFilePublisher $publisher,
         private readonly ScaffoldingFilesystem $filesystem,
-    ) {}
+        ?RequestNamespaceValidator $requestNamespaceValidator = null,
+    ) {
+        $this->requestNamespaceValidator = $requestNamespaceValidator ?? new RequestNamespaceValidator;
+    }
 
     public function render(SkirMethodDefinition $method, ?string $className = null): RenderedFile
     {
@@ -98,30 +103,8 @@ final class FormRequestScaffolder
 
     private function requestNamespace(SkirMethodDefinition $method): string
     {
-        $configuredNamespace = config('skir-server.scaffolding.request_namespace');
-
-        if (! is_string($configuredNamespace)) {
-            throw SkirScaffoldingException::invalidRequestNamespace($configuredNamespace);
-        }
-
+        $configuredNamespace = $this->requestNamespaceValidator->resolve();
         $namespaceSegments = explode('\\', $configuredNamespace);
-
-        if ($configuredNamespace === '' || in_array('', $namespaceSegments, true)) {
-            throw SkirScaffoldingException::invalidRequestNamespace($configuredNamespace);
-        }
-
-        foreach ($namespaceSegments as $namespaceSegment) {
-            if (! $this->isIdentifier($namespaceSegment)) {
-                throw SkirScaffoldingException::invalidRequestNamespace($configuredNamespace);
-            }
-        }
-
-        $applicationNamespace = $this->applicationNamespace();
-        $applicationNamespaceSegments = explode('\\', $applicationNamespace);
-
-        if (array_slice($namespaceSegments, 0, count($applicationNamespaceSegments)) !== $applicationNamespaceSegments) {
-            throw SkirScaffoldingException::namespaceOutsideApplication($configuredNamespace, $applicationNamespace);
-        }
 
         $moduleSegments = explode('.', $method->module);
 

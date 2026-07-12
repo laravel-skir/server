@@ -14,7 +14,10 @@ use Skir\Server\Scaffolding\ControllerStyle;
 use Skir\Server\Scaffolding\Manifest\ManifestRepository;
 use Skir\Server\Scaffolding\Manifest\SkirMethodDefinition;
 use Skir\Server\Scaffolding\Manifest\SkirModuleDefinition;
+use Skir\Server\Scaffolding\RequestNamespaceValidator;
 use Skir\Server\Scaffolding\ScaffoldingSelection;
+use Symfony\Component\Console\Output\OutputInterface;
+use Throwable;
 
 use function Laravel\Prompts\confirm;
 use function Laravel\Prompts\multiselect;
@@ -40,6 +43,7 @@ final class MakeSkirCommand extends Command
         private readonly ControllerScaffolding $scaffolder,
         private readonly GeneratorRunner $generator,
         private readonly ControllerClassValidator $controllerClassValidator,
+        private readonly RequestNamespaceValidator $requestNamespaceValidator,
     ) {
         parent::__construct();
     }
@@ -106,17 +110,53 @@ final class MakeSkirCommand extends Command
 
         $style = $this->configuredStyle();
         $controller = $this->option('controller');
+        $styleOption = $this->option('style');
 
         if (is_string($controller)) {
-            if ($style !== ControllerStyle::Single) {
+            $hasExplicitStyle = is_string($styleOption) && $styleOption !== '';
+
+            if ($hasExplicitStyle && $style !== ControllerStyle::Single) {
                 throw new InvalidArgumentException('Option [--controller] may only be used with the [single] controller style.');
             }
 
             $this->controllerClassValidator->resolve($controller);
         }
 
+        $this->validateScaffoldingConfiguration($style, $controller);
+
         if ($this->option('generate')) {
             $this->generatorCommand();
+        }
+    }
+
+    private function validateScaffoldingConfiguration(ControllerStyle $style, mixed $controller): void
+    {
+        $this->controllerClassValidator->resolveControllerNamespace();
+
+        if ($style === ControllerStyle::Single && ! is_string($controller)) {
+            $configuredController = config('skir-server.scaffolding.single_controller');
+
+            if (! is_string($configuredController)) {
+                throw SkirScaffoldingException::invalidSingleController(get_debug_type($configuredController));
+            }
+
+            $this->controllerClassValidator->resolve($configuredController);
+        }
+
+        if ($this->option('without-requests')) {
+            return;
+        }
+
+        $this->requestNamespaceValidator->resolve();
+
+        if ($this->option('with-requests')) {
+            return;
+        }
+
+        $formRequests = config('skir-server.scaffolding.form_requests');
+
+        if (! is_bool($formRequests)) {
+            throw new InvalidArgumentException('Skir scaffolding configuration [form_requests] must be a boolean.');
         }
     }
 
@@ -128,14 +168,20 @@ final class MakeSkirCommand extends Command
 
         $command = $this->generatorCommand();
         $this->components->info('Generating Skir definitions and server manifest...');
-        $status = $this->generator->run(
-            $command,
-            base_path(),
-            null,
-            function (string $type, string $buffer): void {
-                $this->output->write($buffer);
-            },
-        );
+        try {
+            $status = $this->generator->run(
+                $command,
+                base_path(),
+                null,
+                function (string $type, string $buffer): void {
+                    $this->output->write($buffer, false, OutputInterface::OUTPUT_RAW);
+                },
+            );
+        } catch (Throwable $exception) {
+            $this->components->error("Skir generator failed to start or run: {$exception->getMessage()}");
+
+            return self::FAILURE;
+        }
 
         if ($status === self::SUCCESS) {
             return self::SUCCESS;
@@ -158,7 +204,7 @@ final class MakeSkirCommand extends Command
         }
 
         foreach ($command as $argument) {
-            if (! is_string($argument) || $argument === '') {
+            if (! is_string($argument) || trim($argument) === '') {
                 throw new InvalidArgumentException(
                     'Skir generator configuration [generator_command] must contain only non-empty string arguments.',
                 );
@@ -172,8 +218,10 @@ final class MakeSkirCommand extends Command
     {
         $methods = $this->selectedMethods();
         $styleOption = $this->option('style');
+        $controllerOption = $this->option('controller');
         $hasExplicitStyle = is_string($styleOption) && $styleOption !== '';
-        $shouldPromptForStyle = $this->input->isInteractive() && ! $hasExplicitStyle;
+        $hasExplicitLayout = $hasExplicitStyle || is_string($controllerOption);
+        $shouldPromptForStyle = $this->input->isInteractive() && ! $hasExplicitLayout;
         $style = $shouldPromptForStyle
             ? $this->interactiveStyle()
             : $this->configuredStyle();
@@ -315,9 +363,15 @@ final class MakeSkirCommand extends Command
     private function configuredStyle(): ControllerStyle
     {
         $option = $this->option('style');
-        $style = is_string($option) && $option !== ''
-            ? $option
-            : config('skir-server.scaffolding.controller_style', ControllerStyle::Module->value);
+        $controller = $this->option('controller');
+
+        if (is_string($option) && $option !== '') {
+            $style = $option;
+        } elseif (is_string($controller)) {
+            $style = ControllerStyle::Single->value;
+        } else {
+            $style = config('skir-server.scaffolding.controller_style');
+        }
 
         if (! is_string($style)) {
             throw new InvalidArgumentException('Skir scaffolding configuration [controller_style] must be a supported string.');
