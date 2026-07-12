@@ -126,4 +126,11 @@ final class SkirScaffoldingException extends RuntimeException
     {
         return new self("Unable to atomically write the form request [{$path}].");
     }
+
+    public static function atomicPublicationUnavailable(string $path): self
+    {
+        return new self(
+            "Atomic publication is unavailable for form request [{$path}]. Ensure the application filesystem supports same-directory hard links.",
+        );
+    }
 }

@@ -4,14 +4,18 @@ declare(strict_types=1);
 
 namespace Skir\Server\Scaffolding;
 
+use Closure;
 use Skir\Server\Exceptions\SkirScaffoldingException;
 
 final class AtomicFilePublisher
 {
+    /** @param (Closure(string, string): bool)|null $linker */
+    public function __construct(private readonly ?Closure $linker = null) {}
+
     public function publish(string $temporaryPath, string $destinationPath): void
     {
         try {
-            if (@link($temporaryPath, $destinationPath)) {
+            if ($this->link($temporaryPath, $destinationPath)) {
                 return;
             }
 
@@ -19,7 +23,7 @@ final class AtomicFilePublisher
                 throw SkirScaffoldingException::existingFile($destinationPath);
             }
 
-            $this->publishWithExclusiveCreate($temporaryPath, $destinationPath);
+            throw SkirScaffoldingException::atomicPublicationUnavailable($destinationPath);
         } finally {
             if (file_exists($temporaryPath)) {
                 @unlink($temporaryPath);
@@ -27,48 +31,12 @@ final class AtomicFilePublisher
         }
     }
 
-    private function publishWithExclusiveCreate(string $temporaryPath, string $destinationPath): void
+    private function link(string $temporaryPath, string $destinationPath): bool
     {
-        $destination = @fopen($destinationPath, 'xb');
-
-        if ($destination === false) {
-            if (file_exists($destinationPath)) {
-                throw SkirScaffoldingException::existingFile($destinationPath);
-            }
-
-            throw SkirScaffoldingException::unableToWriteFile($destinationPath);
+        if ($this->linker !== null) {
+            return ($this->linker)($temporaryPath, $destinationPath);
         }
 
-        $source = @fopen($temporaryPath, 'rb');
-        $published = false;
-
-        try {
-            if ($source === false) {
-                throw SkirScaffoldingException::unableToWriteFile($destinationPath);
-            }
-
-            $copiedBytes = stream_copy_to_stream($source, $destination);
-            $expectedBytes = filesize($temporaryPath);
-
-            if ($expectedBytes === false || $copiedBytes !== $expectedBytes) {
-                throw SkirScaffoldingException::unableToWriteFile($destinationPath);
-            }
-
-            if (! fflush($destination)) {
-                throw SkirScaffoldingException::unableToWriteFile($destinationPath);
-            }
-
-            $published = true;
-        } finally {
-            if (is_resource($source)) {
-                fclose($source);
-            }
-
-            fclose($destination);
-
-            if (! $published) {
-                @unlink($destinationPath);
-            }
-        }
+        return @link($temporaryPath, $destinationPath);
     }
 }
