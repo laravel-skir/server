@@ -11,6 +11,7 @@ use Skir\Server\Commands\GeneratorRunner;
 use Skir\Server\Commands\SymfonyGeneratorRunner;
 use Skir\Server\Scaffolding\ControllerScaffolding;
 use Skir\Server\Scaffolding\ControllerScaffoldingResult;
+use Skir\Server\Scaffolding\Manifest\ManifestRepository;
 use Skir\Server\Scaffolding\RouteRegistration;
 use Skir\Server\Tests\TestCase;
 
@@ -108,6 +109,89 @@ final class MakeSkirCommandTest extends TestCase
             '--no-interaction' => true,
         ])->assertSuccessful();
         self::assertFileExists($this->temporaryDirectory.'/app/Rpc/BackofficeController.php');
+    }
+
+    public function test_producer_normalized_module_identities_remain_distinct_through_selection_and_scaffolding(): void
+    {
+        $this->writeManifest([
+            $this->module('_Root', 'Skir\\RootSkirMethod', [
+                $this->method('RootLevel', 'RootLevel', 'Skir\\RootLevelRequest'),
+            ]),
+            $this->module('Root', 'Skir\\Root\\RootSkirMethod', [
+                $this->method('DirectoryRoot', 'DirectoryRoot', 'Skir\\Root\\DirectoryRootRequest'),
+            ]),
+            $this->module('AdminUsers', 'Skir\\AdminUsers\\AdminUsersSkirMethod', [
+                $this->method('LiteralDirectory', 'LiteralDirectory', 'Skir\\AdminUsers\\LiteralDirectoryRequest'),
+            ]),
+            $this->module('Admin.Users', 'Skir\\Admin\\Users\\UsersSkirMethod', [
+                $this->method('NestedDirectory', 'NestedDirectory', 'Skir\\Admin\\Users\\NestedDirectoryRequest'),
+            ]),
+            $this->module('UserProfile', 'Skir\\UserProfile\\UserProfileSkirMethod', [
+                $this->method('GetProfile', 'GetProfile', 'Skir\\UserProfile\\GetProfileRequest'),
+            ]),
+        ]);
+
+        $repository = app(ManifestRepository::class);
+
+        self::assertSame([
+            '_Root.RootLevel',
+            'Root.DirectoryRoot',
+            'AdminUsers.LiteralDirectory',
+            'Admin.Users.NestedDirectory',
+            'UserProfile.GetProfile',
+        ], array_keys($repository->methods()));
+
+        $this->artisan('skir:make', [
+            '--all' => true,
+            '--style' => 'module',
+            '--with-requests' => true,
+            '--no-interaction' => true,
+        ])->expectsOutputToContain('_Root.RootLevel')
+            ->expectsOutputToContain('Root.DirectoryRoot')
+            ->expectsOutputToContain('AdminUsers.LiteralDirectory')
+            ->expectsOutputToContain('Admin.Users.NestedDirectory')
+            ->expectsOutputToContain('UserProfile.GetProfile')
+            ->assertSuccessful();
+
+        foreach ([
+            'app/Skir/_Root/_RootController.php',
+            'app/Skir/Root/RootController.php',
+            'app/Skir/AdminUsers/AdminUsersController.php',
+            'app/Skir/Admin/Users/UsersController.php',
+            'app/Skir/UserProfile/UserProfileController.php',
+            'app/Http/Requests/Skir/_Root/RootLevelFormRequest.php',
+            'app/Http/Requests/Skir/Root/DirectoryRootFormRequest.php',
+            'app/Http/Requests/Skir/AdminUsers/LiteralDirectoryFormRequest.php',
+            'app/Http/Requests/Skir/Admin/Users/NestedDirectoryFormRequest.php',
+            'app/Http/Requests/Skir/UserProfile/GetProfileFormRequest.php',
+        ] as $path) {
+            self::assertFileExists($this->temporaryDirectory.'/'.$path);
+        }
+
+        self::assertStringContainsString(
+            'namespace App\\Skir\\UserProfile;',
+            (string) file_get_contents($this->temporaryDirectory.'/app/Skir/UserProfile/UserProfileController.php'),
+        );
+        self::assertStringContainsString(
+            'namespace App\\Http\\Requests\\Skir\\UserProfile;',
+            (string) file_get_contents($this->temporaryDirectory.'/app/Http/Requests/Skir/UserProfile/GetProfileFormRequest.php'),
+        );
+
+        $this->artisan('skir:make', [
+            '--method' => ['UserProfile.GetProfile', '_Root.RootLevel'],
+            '--style' => 'module',
+            '--with-requests' => true,
+            '--no-interaction' => true,
+        ])->expectsOutputToContain('Unchanged')
+            ->assertSuccessful();
+
+        self::assertSame([
+            '_Root.RootLevel',
+            'Root.DirectoryRoot',
+            'AdminUsers.LiteralDirectory',
+            'Admin.Users.NestedDirectory',
+            'UserProfile.GetProfile',
+        ], array_keys($repository->methods()));
     }
 
     public function test_request_flags_override_the_configured_default(): void

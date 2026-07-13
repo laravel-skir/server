@@ -40,6 +40,8 @@ Both generators write `skir-server-manifest.json` at the root of their configure
 app/Skir/skirout/skir-server-manifest.json
 ```
 
+Module selectors use the generators' normalized PHP namespace segments joined with dots. For example, `user-profile/` is selected as `UserProfile`, nested `admin/users/` as `Admin.Users`, and a literal `admin.users/` directory as `AdminUsers`. Root-level methods use the reserved `_Root` module, while methods inside a real `Root/` directory use `Root`, so both can be selected and scaffolded independently. These same names prefix exact method IDs such as `_Root.Health` and `UserProfile.GetProfile`.
+
 The `configure-composer` step registers `Skir\\` to `app/Skir/skirout/` in the consuming application's `composer.json`. It does not run Composer, so rebuild the autoloader afterward as shown above. The generator repository also documents manual mapping and alternate project-root options.
 
 ## Scaffold controllers
