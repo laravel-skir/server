@@ -1,6 +1,14 @@
+![Laravel Skir Server](art/banner.png)
+
 # Laravel Skir Server
 
 Laravel package for exposing SkirRPC methods from a Laravel application.
+
+## Why Skir?
+
+[Skir](https://skir.build/) is a modern schema language for defining data models and APIs. You describe your structs, enums, and RPC methods once in `.skir` files, then generate clean, idiomatic, and type-safe code across your stack. Skir includes generators for TypeScript, Python, Java, Go, C#, C++, Kotlin, Rust, Swift, and more, while the PHP generators in this ecosystem bring the same schema-first workflow to Laravel. This gives your backend, frontend, and other services a shared source of truth instead of separately maintained DTOs and API contracts.
+
+SkirRPC offers many of the same benefits as gRPC—shared method definitions, generated clients and servers, and end-to-end type safety—but runs over standard HTTP requests and integrates with the frameworks you already use. This package brings that workflow to Laravel: generated contracts handle serialization and type information, while your procedures remain ordinary Laravel controllers resolved through the container.
 
 ## Features
 
