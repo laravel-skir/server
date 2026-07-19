@@ -4,3 +4,4 @@
 composer.lock
 /docs/superpowers/
 /.worktrees/
+/build/
