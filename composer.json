@@ -32,6 +32,7 @@
     "require-dev": {
         "laravel/pint": "^1.29",
         "orchestra/testbench": "^11.0",
+        "php-skir/client": "^0.1@dev",
         "phpunit/phpunit": "^12.5",
         "spomky-labs/cbor-php": "^3.2"
     },
@@ -49,6 +50,13 @@
         {
             "type": "path",
             "url": "../runtime",
+            "options": {
+                "symlink": false
+            }
+        },
+        {
+            "type": "path",
+            "url": "../client",
             "options": {
                 "symlink": false
             }

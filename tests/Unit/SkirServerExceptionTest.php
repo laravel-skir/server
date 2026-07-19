@@ -48,6 +48,20 @@ final class SkirServerExceptionTest extends TestCase
                 422,
                 'Skir method [Duplicate] is already registered on this endpoint.',
             ],
+            'invalid route provider' => [
+                SkirServerException::invalidRouteProvider(new InvalidRouteProvider),
+                'skir_invalid_route_provider',
+                500,
+                'Skir route provider ['.InvalidRouteProvider::class.'] must implement '
+                .'[Skir\\Server\\Routing\\SkirRouteDefinition] or [Skir\\Server\\ProcedureProvider].',
+            ],
+            'missing route provider class' => [
+                SkirServerException::invalidRouteProvider('App\\Skir\\MissingProvider'),
+                'skir_invalid_route_provider',
+                500,
+                'Skir route provider [App\\Skir\\MissingProvider] must implement '
+                .'[Skir\\Server\\Routing\\SkirRouteDefinition] or [Skir\\Server\\ProcedureProvider].',
+            ],
             'missing CBOR dependency' => [
                 SkirServerException::missingCborDependency(),
                 'skir_missing_cbor_dependency',
@@ -57,3 +71,5 @@ final class SkirServerExceptionTest extends TestCase
         ];
     }
 }
+
+final class InvalidRouteProvider {}

@@ -4,13 +4,18 @@ declare(strict_types=1);
 
 namespace Skir\Server\Tests\Feature;
 
+use Illuminate\Container\Attributes\Bind;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Route;
+use LogicException;
 use PHPUnit\Framework\Attributes\Test;
 use Skir\Runtime\MethodDescriptor;
 use Skir\Runtime\Type;
 use Skir\Server\Codecs\SkirCodec;
+use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\ProcedureProvider;
+use Skir\Server\Routing\SkirRouteDefinition;
 use Skir\Server\SkirServer;
 use Skir\Server\Tests\TestCase;
 
@@ -30,6 +35,121 @@ final class SkirRouteConfigurationTest extends TestCase
             ])
             ->assertOk()
             ->assertContent('"provider:5"');
+    }
+
+    #[Test]
+    public function it_rejects_invalid_configured_route_providers(): void
+    {
+        $this->expectException(SkirServerException::class);
+        $this->expectExceptionMessage(
+            'Skir route provider ['.InvalidConfiguredProvider::class.'] must implement ['
+            .'Skir\\Server\\Routing\\SkirRouteDefinition] or [Skir\\Server\\ProcedureProvider].',
+        );
+
+        Route::skirRpc('/invalid-provider', [
+            InvalidConfiguredProvider::class,
+        ]);
+    }
+
+    #[Test]
+    public function it_rejects_missing_configured_route_provider_classes_with_the_configured_identity(): void
+    {
+        $this->expectException(SkirServerException::class);
+        $this->expectExceptionMessage(
+            'Skir route provider ['.MissingConfiguredProvider::class.'] must implement ['
+            .'Skir\\Server\\Routing\\SkirRouteDefinition] or [Skir\\Server\\ProcedureProvider].',
+        );
+
+        Route::skirRpc('/missing-provider', [
+            MissingConfiguredProvider::class,
+        ]);
+    }
+
+    #[Test]
+    public function it_does_not_mask_errors_from_valid_provider_factories(): void
+    {
+        app()->bind(
+            FactoryFailureProvider::class,
+            fn (): FactoryFailureProvider => throw new LogicException('Provider factory failed.'),
+        );
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('Provider factory failed.');
+
+        Route::skirRpc('/factory-failure', [
+            FactoryFailureProvider::class,
+        ]);
+    }
+
+    #[Test]
+    public function it_does_not_mask_binding_resolution_errors_from_bound_provider_factories(): void
+    {
+        app()->bind(
+            BindingResolutionFactoryProvider::class,
+            fn (): BindingResolutionFactoryProvider => throw new BindingResolutionException('Bound provider resolution failed.'),
+        );
+
+        $this->expectException(BindingResolutionException::class);
+        $this->expectExceptionMessage('Bound provider resolution failed.');
+
+        Route::skirRpc('/binding-resolution-factory-failure', [
+            BindingResolutionFactoryProvider::class,
+        ]);
+    }
+
+    #[Test]
+    public function it_resolves_container_bound_provider_interfaces(): void
+    {
+        app()->bind(ContainerBoundProvider::class, ContainerBoundProviderImplementation::class);
+
+        $route = Route::skirRpc('/bound-provider', [
+            ContainerBoundProvider::class,
+        ]);
+
+        $this->assertSame(
+            ['ContainerBoundMethod'],
+            array_keys($this->serverFromRoute($route)->procedures()),
+        );
+    }
+
+    #[Test]
+    public function it_resolves_lazily_bound_provider_interfaces(): void
+    {
+        app()->resolveEnvironmentUsing(app()->environment(...));
+
+        $route = Route::skirRpc('/lazy-bound-provider', [
+            LazyBoundProvider::class,
+        ]);
+
+        $this->assertSame(
+            ['LazyBoundMethod'],
+            array_keys($this->serverFromRoute($route)->procedures()),
+        );
+    }
+
+    #[Test]
+    public function it_does_not_mask_binding_resolution_errors_from_concrete_providers(): void
+    {
+        $this->expectException(BindingResolutionException::class);
+        $this->expectExceptionMessage('Target [Skir\\Server\\Tests\\Feature\\MissingProviderDependency] is not instantiable');
+
+        Route::skirRpc('/constructor-resolution-failure', [
+            ConstructorResolutionFailureProvider::class,
+        ]);
+    }
+
+    #[Test]
+    public function it_preserves_the_order_of_mixed_route_definitions_and_procedure_providers(): void
+    {
+        $route = Route::skirRpc('/mixed-providers', [
+            new OrderedRouteDefinition,
+            new OrderedProcedureProvider,
+        ]);
+
+        $this->assertSame(
+            ['RouteDefinitionMethod', 'ProcedureProviderMethod'],
+            array_keys($this->serverFromRoute($route)->procedures()),
+        );
     }
 
     #[Test]
@@ -126,6 +246,76 @@ final class ProviderDependency
     public function describe(float $value): string
     {
         return "provider:{$value}";
+    }
+}
+
+final class InvalidConfiguredProvider {}
+
+final class FactoryFailureProvider implements ProcedureProvider
+{
+    public function register(SkirServer $server): void {}
+}
+
+final class BindingResolutionFactoryProvider implements ProcedureProvider
+{
+    public function register(SkirServer $server): void {}
+}
+
+interface ContainerBoundProvider extends ProcedureProvider {}
+
+final class ContainerBoundProviderImplementation implements ContainerBoundProvider
+{
+    public function register(SkirServer $server): void
+    {
+        $server->addMethod(
+            new MethodDescriptor('ContainerBoundMethod', 5007, Type::string(), Type::string()),
+            fn (string $request): string => $request,
+        );
+    }
+}
+
+#[Bind(LazyBoundProviderImplementation::class)]
+interface LazyBoundProvider extends ProcedureProvider {}
+
+final class LazyBoundProviderImplementation implements LazyBoundProvider
+{
+    public function register(SkirServer $server): void
+    {
+        $server->addMethod(
+            new MethodDescriptor('LazyBoundMethod', 5008, Type::string(), Type::string()),
+            fn (string $request): string => $request,
+        );
+    }
+}
+
+interface MissingProviderDependency {}
+
+final class ConstructorResolutionFailureProvider implements ProcedureProvider
+{
+    public function __construct(MissingProviderDependency $dependency) {}
+
+    public function register(SkirServer $server): void {}
+}
+
+final class OrderedRouteDefinition implements SkirRouteDefinition
+{
+    public function register(SkirServer $server): void
+    {
+        $server->addMethod(
+            new MethodDescriptor('RouteDefinitionMethod', 5005, Type::string(), Type::string()),
+            fn (string $request): string => $request,
+        );
+    }
+}
+
+final class OrderedProcedureProvider implements ProcedureProvider
+{
+    public function register(SkirServer $server): void
+    {
+        $server->addMethod(
+            new MethodDescriptor('ProcedureProviderMethod', 5006, Type::string(), Type::string()),
+            fn (string $request): string => $request,
+        );
     }
 }
 

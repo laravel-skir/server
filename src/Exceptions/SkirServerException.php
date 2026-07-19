@@ -32,6 +32,23 @@ final class SkirServerException extends RuntimeException
         return new self("Skir method [{$method}] is already registered on this endpoint.", 'skir_duplicate_method', 422);
     }
 
+    public static function invalidRouteProvider(mixed $provider): self
+    {
+        if (is_string($provider)) {
+            $providerType = $provider;
+        } elseif (is_object($provider)) {
+            $providerType = $provider::class;
+        } else {
+            $providerType = get_debug_type($provider);
+        }
+
+        return new self(
+            "Skir route provider [{$providerType}] must implement [Skir\\Server\\Routing\\SkirRouteDefinition] or [Skir\\Server\\ProcedureProvider].",
+            'skir_invalid_route_provider',
+            500,
+        );
+    }
+
     public static function missingCborDependency(): self
     {
         return new self(
