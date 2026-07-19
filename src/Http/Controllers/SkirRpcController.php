@@ -42,7 +42,8 @@ final readonly class SkirRpcController
             $payload = $this->payloadFromRequest($request, $codec);
             $method = $this->methodFromPayload($payload);
             $procedure = $server->procedure($method);
-            $decodedRequest = $codec->decodeRequest($procedure->descriptor, $payload['request'] ?? 0);
+            $requestPayload = array_key_exists('request', $payload) ? $payload['request'] : 0;
+            $decodedRequest = $codec->decodeRequest($procedure->descriptor, $requestPayload);
             $result = $procedure->invoke($decodedRequest, new RequestContext($request, $procedure->descriptor));
             $encodedResponse = $codec->encodeResponse($procedure->descriptor, $result);
 
@@ -96,13 +97,17 @@ final readonly class SkirRpcController
             return $codec->decodePayload($request->getContent());
         }
 
-        $payload = $request->json()->all();
+        try {
+            $decodedPayload = json_decode($request->getContent(), flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw SkirServerException::invalidRequest("Invalid JSON: {$exception->getMessage()}");
+        }
 
-        if (! is_array($payload)) {
+        if (! is_object($decodedPayload)) {
             throw SkirServerException::invalidRequest('Skir requests must be JSON objects.');
         }
 
-        return $payload;
+        return $request->json()->all();
     }
 
     /**
