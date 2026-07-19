@@ -2,6 +2,12 @@
 
 # Laravel Skir Server
 
+[![Tests](https://github.com/php-skir/server/actions/workflows/tests.yml/badge.svg)](https://github.com/php-skir/server/actions/workflows/tests.yml)
+[![Coverage](https://raw.githubusercontent.com/php-skir/server/badges/coverage.svg)](https://github.com/php-skir/server/actions/workflows/tests.yml)
+[![Composer](https://img.shields.io/packagist/v/php-skir/server?label=composer&logo=composer)](https://packagist.org/packages/php-skir/server)
+[![PHP](https://img.shields.io/badge/PHP-%5E8.4-777BB4?logo=php&logoColor=white)](https://packagist.org/packages/php-skir/server)
+[![License](https://img.shields.io/github/license/php-skir/server)](LICENSE)
+
 Laravel package for exposing SkirRPC methods from a Laravel application.
 
 ## Why Skir?

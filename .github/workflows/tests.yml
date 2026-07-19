@@ -1,30 +1,35 @@
-name: tests
+name: Tests
 
 on:
   push:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   tests:
+    name: PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        php-version:
-          - '8.4'
-          - '8.5'
+        php:
+          - "8.4"
+          - "8.5"
 
     steps:
       - name: Checkout server
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: server
 
       - name: Checkout runtime
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: php-skir/runtime
           path: runtime
@@ -32,7 +37,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ matrix.php-version }}
+          php-version: ${{ matrix.php }}
           coverage: none
           tools: composer:v2
 
@@ -47,3 +52,54 @@ jobs:
       - name: Run tests
         run: composer test
         working-directory: server
+
+  coverage:
+    name: Coverage
+    if: github.ref == 'refs/heads/main'
+    needs: tests
+    runs-on: ubuntu-latest
+    concurrency:
+      group: coverage-badge
+      cancel-in-progress: false
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout server
+        uses: actions/checkout@v7
+        with:
+          path: server
+
+      - name: Checkout runtime
+        uses: actions/checkout@v7
+        with:
+          repository: php-skir/runtime
+          path: runtime
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          coverage: pcov
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+        working-directory: server
+
+      - name: Measure coverage
+        working-directory: server
+        run: |
+          mkdir -p build
+          vendor/bin/phpunit --coverage-clover=build/coverage.xml --coverage-filter=src
+          php -r '$xml = simplexml_load_file("build/coverage.xml"); $metrics = $xml->project->metrics; $statements = (int) $metrics["statements"]; $covered = (int) $metrics["coveredstatements"]; $percentage = $statements > 0 ? ($covered / $statements) * 100 : 0; file_put_contents("build/coverage-percentage.txt", (string) $percentage);'
+
+      - name: Generate coverage badge
+        working-directory: server
+        run: node .github/scripts/write-coverage-badge.mjs "$(cat build/coverage-percentage.txt)" build/coverage.svg
+
+      - name: Publish coverage badge
+        working-directory: server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/publish-coverage-badge.sh build/coverage.svg
