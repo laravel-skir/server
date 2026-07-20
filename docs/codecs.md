@@ -24,7 +24,7 @@ The codec class is resolved through Laravel's container and must implement `Skir
 
 ## Dense JSON
 
-Dense JSON uses the generated method descriptor to decode and encode Skir's compact JSON representation:
+Dense JSON uses the generated method descriptor to decode and encode Skir's compact JSON representation. With the shipped configuration, omitting the third argument uses Dense JSON:
 
 ```php
 use App\Http\Skir\UserController;
@@ -36,7 +36,7 @@ Route::skirRpc('/api/skir', [
 ]);
 ```
 
-The explicit equivalent is:
+To force Dense JSON for this route regardless of the configured default, pass it explicitly:
 
 ```php
 use Skir\Server\Codecs\SkirCodecs;
