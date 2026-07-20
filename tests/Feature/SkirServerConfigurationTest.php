@@ -7,6 +7,7 @@ namespace Skir\Server\Tests\Feature;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use LogicException;
 use PHPUnit\Framework\Attributes\Test;
 use Skir\Runtime\MethodDescriptor;
 use Skir\Server\Codecs\DenseJsonCodec;
@@ -47,15 +48,28 @@ final class SkirServerConfigurationTest extends TestCase
             new ConfigurationProcedureProvider,
         ]);
         $isolatedServer = $this->serverFromRoute($route);
+        $configuredCodec = $globalServer->codec();
 
-        $this->assertInstanceOf(ConfiguredCodec::class, $globalServer->codec());
-        $this->assertSame($globalServer->codec(), $isolatedServer->codec());
+        $this->assertInstanceOf(ConfiguredCodec::class, $configuredCodec);
+        $this->assertInstanceOf(ConfiguredCodecDependency::class, $configuredCodec->dependency);
+        $this->assertSame($configuredCodec, $isolatedServer->codec());
+    }
+
+    #[Test]
+    public function configured_codec_construction_exceptions_are_preserved(): void
+    {
+        config(['skir-server.codec' => FailingConfiguredCodec::class]);
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('Configured codec construction failed.');
+
+        app(SkirCodec::class);
     }
 
     #[Test]
     public function an_explicit_route_codec_overrides_the_configured_codec(): void
     {
-        config(['skir-server.codec' => ConfiguredCodec::class]);
+        config(['skir-server.codec' => InvalidConfiguredCodec::class]);
 
         $explicitCodec = new ExplicitCodec;
         $route = Route::skirRpc(
@@ -79,6 +93,19 @@ final class SkirServerConfigurationTest extends TestCase
         );
 
         app(SkirServer::class);
+    }
+
+    #[Test]
+    public function a_non_string_configured_codec_is_rejected(): void
+    {
+        config(['skir-server.codec' => []]);
+
+        $this->expectException(SkirServerException::class);
+        $this->expectExceptionMessage(
+            'Configured Skir codec [array] must implement [Skir\\Server\\Codecs\\SkirCodec].',
+        );
+
+        app(SkirCodec::class);
     }
 
     #[Test]
@@ -108,8 +135,30 @@ final class SkirServerConfigurationTest extends TestCase
     }
 }
 
-final class ConfiguredCodec implements SkirCodec
+final readonly class ConfiguredCodec implements SkirCodec
 {
+    public function __construct(public ConfiguredCodecDependency $dependency) {}
+
+    public function decodeRequest(MethodDescriptor $descriptor, mixed $request): mixed
+    {
+        return $request;
+    }
+
+    public function encodeResponse(MethodDescriptor $descriptor, mixed $response): mixed
+    {
+        return $response;
+    }
+}
+
+final class ConfiguredCodecDependency {}
+
+final class FailingConfiguredCodec implements SkirCodec
+{
+    public function __construct()
+    {
+        throw new LogicException('Configured codec construction failed.');
+    }
+
     public function decodeRequest(MethodDescriptor $descriptor, mixed $request): mixed
     {
         return $request;
