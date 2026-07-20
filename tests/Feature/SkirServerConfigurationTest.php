@@ -87,6 +87,35 @@ final class SkirServerConfigurationTest extends TestCase
     }
 
     #[Test]
+    public function studio_configuration_is_snapshotted_when_the_route_is_registered(): void
+    {
+        config([
+            'skir-server.studio_enabled' => true,
+            'skir-server.studio_query_key' => 'registered-studio',
+        ]);
+
+        Route::skirRpc('/snapshotted-studio', [
+            new ConfigurationProcedureProvider,
+        ]);
+
+        config([
+            'skir-server.studio_enabled' => false,
+            'skir-server.studio_query_key' => 'changed-studio',
+        ]);
+
+        $this
+            ->get('/snapshotted-studio?registered-studio')
+            ->assertOk()
+            ->assertHeader('content-type', 'text/html; charset=UTF-8')
+            ->assertSee('Skir RPC Studio');
+
+        $this
+            ->get('/snapshotted-studio?changed-studio')
+            ->assertUnprocessable()
+            ->assertDontSee('Skir RPC Studio');
+    }
+
+    #[Test]
     public function dense_json_is_the_default_codec(): void
     {
         $this->assertSame(DenseJsonCodec::class, config('skir-server.codec'));
