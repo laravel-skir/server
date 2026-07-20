@@ -17,4 +17,14 @@
             <directory>src</directory>
         </include>
     </source>
+    <php>
+        <env name="APP_ENV" value="testing" force="true"/>
+        <env name="APP_DEBUG" value="false" force="true"/>
+        <env name="SESSION_DRIVER" value="array" force="true"/>
+        <env name="CACHE_STORE" value="array" force="true"/>
+        <server name="APP_ENV" value="testing" force="true"/>
+        <server name="APP_DEBUG" value="false" force="true"/>
+        <server name="SESSION_DRIVER" value="array" force="true"/>
+        <server name="CACHE_STORE" value="array" force="true"/>
+    </php>
 </phpunit>
