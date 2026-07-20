@@ -4,17 +4,24 @@ declare(strict_types=1);
 
 namespace Skir\Server\Routing;
 
+use Closure;
 use Illuminate\Container\Util;
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
 use InvalidArgumentException;
 use ReflectionClass;
+use ReflectionIntersectionType;
 use ReflectionMethod;
 use ReflectionNamedType;
 use ReflectionParameter;
+use ReflectionType;
+use ReflectionUnionType;
 use Skir\Server\Contracts\PreparesProcedure;
 use Skir\Server\Exceptions\AmbiguousControllerRequestException;
+use Skir\Server\Exceptions\UnsupportedControllerParameterException;
+use Skir\Server\Exceptions\UnsupportedTerminableMiddlewareException;
 use Skir\Server\Http\Requests\SkirFormRequest;
 use Skir\Server\Http\Requests\SkirFormRequestResolver;
 use Skir\Server\Hydration\SkirPayloadHydrator;
@@ -35,6 +42,7 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
         private SkirFormRequestResolver $formRequestResolver,
         private Router $router,
         private SkirControllerDispatcher $dispatcher,
+        private Container $container,
     ) {}
 
     public function __invoke(mixed $request, SkirContext $context): mixed
@@ -51,6 +59,7 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
             $route->controllerMiddleware(),
             $route->excludedControllerMiddleware(),
         );
+        $this->rejectTerminableMiddleware($middleware);
 
         return new PreparedProcedure(
             $middleware,
@@ -139,6 +148,13 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
                 continue;
             }
 
+            if ($type instanceof ReflectionUnionType || $type instanceof ReflectionIntersectionType) {
+                $this->assertSupportedCompoundType($parameter, $type);
+                $values[] = $request;
+
+                continue;
+            }
+
             if ($this->isFormRequest($typeName)) {
                 if ($request === null && $type?->allowsNull()) {
                     /** @var class-string<SkirFormRequest> $typeName */
@@ -221,6 +237,12 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
             return false;
         }
 
+        if ($type instanceof ReflectionUnionType || $type instanceof ReflectionIntersectionType) {
+            $this->assertSupportedCompoundType($parameter, $type);
+
+            return true;
+        }
+
         if ($this->isFormRequest($typeName) || $this->isLaravelFormRequest($typeName)) {
             return true;
         }
@@ -234,6 +256,54 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
         }
 
         return $this->payloadHydrator->supports($typeName);
+    }
+
+    private function assertSupportedCompoundType(
+        ReflectionParameter $parameter,
+        ReflectionType $type,
+    ): void {
+        if ($type instanceof ReflectionUnionType) {
+            $containsOnlyBuiltinTypes = array_all(
+                $type->getTypes(),
+                static fn (ReflectionType $member): bool => $member instanceof ReflectionNamedType
+                    && $member->isBuiltin(),
+            );
+
+            if ($containsOnlyBuiltinTypes) {
+                return;
+            }
+        }
+
+        throw UnsupportedControllerParameterException::compoundType(
+            $this->controller,
+            $this->method,
+            $parameter->getName(),
+            (string) $type,
+        );
+    }
+
+    /** @param list<Closure|string> $middleware */
+    private function rejectTerminableMiddleware(array $middleware): void
+    {
+        foreach ($middleware as $resolvedMiddleware) {
+            if ($resolvedMiddleware instanceof Closure) {
+                continue;
+            }
+
+            [$middlewareClass] = explode(':', $resolvedMiddleware, 2);
+
+            if ($this->container->bound($middlewareClass)) {
+                if (method_exists($this->container->make($middlewareClass), 'terminate')) {
+                    throw UnsupportedTerminableMiddlewareException::forMiddleware($resolvedMiddleware);
+                }
+
+                continue;
+            }
+
+            if (method_exists($middlewareClass, 'terminate')) {
+                throw UnsupportedTerminableMiddlewareException::forMiddleware($resolvedMiddleware);
+            }
+        }
     }
 
     private function isFormRequest(?string $typeName): bool

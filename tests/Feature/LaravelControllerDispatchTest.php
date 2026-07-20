@@ -20,6 +20,7 @@ use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Request as RequestFacade;
 use Illuminate\Support\Facades\Route;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use Skir\Runtime\Field;
@@ -29,6 +30,8 @@ use Skir\Server\Attributes\SkirMethod;
 use Skir\Server\Codecs\SkirCodecs;
 use Skir\Server\Contracts\SkirMethodReference;
 use Skir\Server\Exceptions\SkirServerException;
+use Skir\Server\Exceptions\UnsupportedControllerParameterException;
+use Skir\Server\Exceptions\UnsupportedTerminableMiddlewareException;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
 use Skir\Server\RegisteredProcedure;
@@ -50,6 +53,7 @@ final class LaravelControllerDispatchTest extends TestCase
         NativeDependency::$resolutions = 0;
         NativeDispatchController::$callActions = 0;
         NativeDispatchController::$contextObjectId = null;
+        UnsupportedCompoundController::$invocations = 0;
         MiddlewareStateSkirRequest::reset();
         ResponsePostProcessingMiddleware::$receivedSymfonyResponse = false;
         RoutingPipelineController::$invocations = 0;
@@ -587,6 +591,94 @@ final class LaravelControllerDispatchTest extends TestCase
         $this->assertSame('string:union-value', $prepared->invoke());
     }
 
+    /** @return iterable<string, array{NativeDispatchMethod, string}> */
+    public static function unsupportedCompoundParameterProvider(): iterable
+    {
+        yield 'service union' => [NativeDispatchMethod::ServiceUnion, 'serviceUnion'];
+        yield 'form request union' => [NativeDispatchMethod::FormRequestUnion, 'formRequestUnion'];
+        yield 'Laravel request union' => [NativeDispatchMethod::LaravelRequestUnion, 'laravelRequestUnion'];
+        yield 'context union' => [NativeDispatchMethod::ContextUnion, 'contextUnion'];
+        yield 'generated DTO union' => [NativeDispatchMethod::GeneratedDtoUnion, 'generatedDtoUnion'];
+        yield 'intersection' => [NativeDispatchMethod::Intersection, 'intersection'];
+    }
+
+    #[Test]
+    #[DataProvider('unsupportedCompoundParameterProvider')]
+    public function object_unions_and_intersections_are_rejected_before_controller_dispatch(
+        NativeDispatchMethod $method,
+        string $phpMethod,
+    ): void {
+        $this->registerController('/unsupported-compound', UnsupportedCompoundController::class);
+        $this->withoutExceptionHandling();
+
+        try {
+            $this->postJson('/unsupported-compound', [
+                'method' => $method->name,
+                'request' => ['name' => 'Maxim'],
+            ]);
+
+            $this->fail('An unsupported compound controller parameter was dispatched.');
+        } catch (UnsupportedControllerParameterException $exception) {
+            $this->assertStringContainsString(
+                UnsupportedCompoundController::class."::{$phpMethod}",
+                $exception->getMessage(),
+            );
+            $this->assertStringContainsString('parameter [$request]', $exception->getMessage());
+            $this->assertStringContainsString('unsupported compound type', $exception->getMessage());
+        }
+
+        $this->assertSame(0, UnsupportedCompoundController::$invocations);
+    }
+
+    #[Test]
+    public function route_and_contextual_parameters_are_excluded_before_compound_type_validation(): void
+    {
+        Route::bind(
+            'routeStatus',
+            static fn (string $status): NativeNullableStatus => NativeNullableStatus::from($status),
+        );
+
+        $this->registerController('/compound-owned/{routeStatus}', CompoundOwnedController::class)
+            ->middleware(SubstituteBindings::class);
+
+        $this
+            ->postJson('/compound-owned/active', [
+                'method' => 'CompoundOwned',
+                'request' => 'payload',
+            ])
+            ->assertOk()
+            ->assertContent('"payload:active:Native Skir"');
+    }
+
+    #[Test]
+    public function terminable_controller_middleware_is_rejected_before_handle_runs(): void
+    {
+        TerminableControllerMiddleware::reset();
+        $this->app->bind(
+            TerminableControllerMiddlewareContract::class,
+            TerminableControllerMiddleware::class,
+        );
+        $this->registerController('/terminable-middleware', TerminableMiddlewareController::class);
+        $this->withoutExceptionHandling();
+
+        try {
+            $this->postJson('/terminable-middleware', [
+                'method' => 'TerminableMiddleware',
+                'request' => null,
+            ]);
+
+            $this->fail('Terminable controller middleware was dispatched without terminate support.');
+        } catch (UnsupportedTerminableMiddlewareException $exception) {
+            $this->assertStringContainsString(
+                TerminableControllerMiddlewareContract::class.':audit',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertFalse(TerminableMiddlewareController::$closureHandled);
+        $this->assertSame([], TerminableControllerMiddleware::$events);
+    }
+
     /** @param class-string $controller */
     private function registerController(string $uri, string $controller): LaravelRoute
     {
@@ -652,6 +744,14 @@ enum NativeDispatchMethod implements SkirMethodReference
     case BoundEnum;
     case MiddlewareFailure;
     case HydrationFailure;
+    case ServiceUnion;
+    case FormRequestUnion;
+    case LaravelRequestUnion;
+    case ContextUnion;
+    case GeneratedDtoUnion;
+    case Intersection;
+    case CompoundOwned;
+    case TerminableMiddleware;
 
     public function descriptor(): MethodDescriptor
     {
@@ -794,6 +894,36 @@ enum NativeDispatchMethod implements SkirMethodReference
                 Type::struct([Field::value('name', 0, Type::string())]),
                 Type::string(),
             ),
+            self::ServiceUnion,
+            self::FormRequestUnion,
+            self::LaravelRequestUnion,
+            self::ContextUnion,
+            self::GeneratedDtoUnion,
+            self::Intersection => new MethodDescriptor(
+                $this->name,
+                6024 + array_search($this, [
+                    self::ServiceUnion,
+                    self::FormRequestUnion,
+                    self::LaravelRequestUnion,
+                    self::ContextUnion,
+                    self::GeneratedDtoUnion,
+                    self::Intersection,
+                ], true),
+                Type::struct([Field::value('name', 0, Type::string())]),
+                Type::string(),
+            ),
+            self::CompoundOwned => new MethodDescriptor(
+                'CompoundOwned',
+                6030,
+                Type::string(),
+                Type::string(),
+            ),
+            self::TerminableMiddleware => new MethodDescriptor(
+                'TerminableMiddleware',
+                6031,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
         };
     }
 }
@@ -926,6 +1056,103 @@ final class ScalarUnionController
     public function dispatch(string|int $request): string
     {
         return get_debug_type($request).":{$request}";
+    }
+}
+
+final class UnsupportedCompoundController
+{
+    public static int $invocations = 0;
+
+    #[SkirMethod(NativeDispatchMethod::ServiceUnion)]
+    public function serviceUnion(NativeDependency|string $request): string
+    {
+        self::$invocations++;
+
+        return 'unreachable';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::FormRequestUnion)]
+    public function formRequestUnion(PipelineValidationSkirRequest|array $request): string
+    {
+        self::$invocations++;
+
+        return 'unreachable';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::LaravelRequestUnion)]
+    public function laravelRequestUnion(Request|array $request): string
+    {
+        self::$invocations++;
+
+        return 'unreachable';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::ContextUnion)]
+    public function contextUnion(SkirContext|string $request): string
+    {
+        self::$invocations++;
+
+        return 'unreachable';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::GeneratedDtoUnion)]
+    public function generatedDtoUnion(NativePayload|array $request): string
+    {
+        self::$invocations++;
+
+        return 'unreachable';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::Intersection)]
+    public function intersection(CompoundRequestA&CompoundRequestB $request): string
+    {
+        self::$invocations++;
+
+        return 'unreachable';
+    }
+}
+
+interface CompoundRequestA {}
+
+interface CompoundRequestB {}
+
+final class CompoundOwnedController
+{
+    #[SkirMethod(NativeDispatchMethod::CompoundOwned)]
+    public function dispatch(
+        string|int $request,
+        NativeNullableStatus|string $routeStatus,
+        #[Config('app.name')] string|int $applicationName,
+    ): string {
+        $routeStatusValue = $routeStatus instanceof NativeNullableStatus
+            ? $routeStatus->value
+            : $routeStatus;
+
+        return "{$request}:{$routeStatusValue}:{$applicationName}";
+    }
+}
+
+final class TerminableMiddlewareController implements HasMiddleware
+{
+    public static bool $closureHandled = false;
+
+    /** @return array<int, Closure> */
+    public static function middleware(): array
+    {
+        self::$closureHandled = false;
+
+        return [static function (Request $request, Closure $next): mixed {
+            self::$closureHandled = true;
+
+            return $next($request);
+        }];
+    }
+
+    #[SkirMethod(NativeDispatchMethod::TerminableMiddleware)]
+    #[ControllerMiddlewareAttribute(TerminableControllerMiddlewareContract::class.':audit')]
+    public function dispatch(): string
+    {
+        return 'unreachable';
     }
 }
 
@@ -1224,6 +1451,31 @@ final class NativeRecordingMiddleware
         NativeDispatchRecorder::$events[] = $event;
 
         return $next($request);
+    }
+}
+
+interface TerminableControllerMiddlewareContract {}
+
+final class TerminableControllerMiddleware implements TerminableControllerMiddlewareContract
+{
+    /** @var list<string> */
+    public static array $events = [];
+
+    public function handle(Request $request, Closure $next, string $channel): mixed
+    {
+        self::$events[] = "handle:{$channel}";
+
+        return $next($request);
+    }
+
+    public function terminate(Request $request, Response $response): void
+    {
+        self::$events[] = 'terminate';
+    }
+
+    public static function reset(): void
+    {
+        self::$events = [];
     }
 }
 
