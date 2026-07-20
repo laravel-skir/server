@@ -34,43 +34,13 @@ composer require php-skir/server std-out/simple-data-objects
 npm install --save-dev skir skir-simple-data-objects-generator
 ```
 
-The package defaults work without publishing configuration. To customize them, publish `config/skir-server.php`:
+The package defaults match the paths used below. To customize manifest locations, generator execution, controller layout, Form Request generation, Studio, or codecs, publish `config/skir-server.php`:
 
 ```bash
 php artisan vendor:publish --tag=skir-server-config
 ```
 
-The published file contains:
-
-```php
-<?php
-
-declare(strict_types=1);
-
-use Skir\Server\Codecs\DenseJsonCodec;
-
-return [
-    'studio_enabled' => env('SKIR_SERVER_STUDIO_ENABLED', false),
-    'studio_query_key' => env('SKIR_SERVER_STUDIO_QUERY_KEY', 'studio'),
-    'codec' => DenseJsonCodec::class,
-
-    'manifests' => [
-        base_path('app/Skir/skirout/skir-server-manifest.json'),
-    ],
-
-    'generator_command' => ['npx', 'skir', 'gen'],
-
-    'scaffolding' => [
-        'controller_style' => 'module',
-        'controller_namespace' => 'App\\Skir',
-        'single_controller' => 'App\\Skir\\SkirController',
-        'request_namespace' => 'App\\Http\\Requests\\Skir',
-        'form_requests' => true,
-    ],
-];
-```
-
-See [Scaffolding](docs/scaffolding.md) for manifest and controller-generation settings. Calling `studio()` or `studio(false)` on a route overrides `studio_enabled`, while an explicit codec passed to `Route::skirRpc()` overrides `codec`.
+See [Scaffolding configuration](docs/scaffolding.md#configure-manifests-and-destinations) for the current keys and defaults. Calling `studio()` or `studio(false)` on a route overrides the Studio default, while an explicit codec passed to `Route::skirRpc()` overrides the configured codec.
 
 Define a Skir method:
 

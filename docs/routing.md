@@ -68,6 +68,7 @@ declare(strict_types=1);
 
 namespace App\Skir\Account;
 
+use App\Actions\AccountActions;
 use App\Http\Requests\Skir\Account\LoginFormRequest;
 use Illuminate\Routing\Attributes\Controllers\Middleware;
 use Skir\Account\AccountSkirMethod;
@@ -79,19 +80,21 @@ use Skir\Server\SkirContext;
 final class AccountController
 {
     #[SkirMethod(AccountSkirMethod::Login)]
-    public function login(LoginFormRequest $request): LoginResponseData
+    public function login(LoginFormRequest $request, AccountActions $accounts): LoginResponseData
     {
-        // Public method.
+        return $accounts->login($request->skir());
     }
 
     #[SkirMethod(AccountSkirMethod::GetMe)]
     #[Middleware('auth:sanctum')]
-    public function getMe(SkirContext $context): UserData
+    public function getMe(SkirContext $context, AccountActions $accounts): UserData
     {
-        // Protected method on the same endpoint.
+        return $accounts->getMe($context->request->user());
     }
 }
 ```
+
+`AccountActions` is an application service in this example; its `login()` and `getMe()` methods construct and return the generated response DTOs. The generated response fields are schema-specific.
 
 Registering that controller and enabling Studio still uses one endpoint:
 
@@ -125,7 +128,14 @@ Terminable controller middleware is not supported. A Skir method does not pass t
 
 ## Form Requests and decoded input
 
-Both ordinary Laravel `FormRequest` classes and `SkirFormRequest` subclasses use Laravel's normal container resolution, authorization, preparation, rules, after-validation hooks, and failure behavior. A `SkirFormRequest` additionally provides the typed `$request->skir()` method described in [Generated procedures](generated-procedures.md#request-hydration-and-validation).
+Both ordinary Laravel `FormRequest` classes and `SkirFormRequest` subclasses use Laravel's native container resolution, input preparation, authorization, rules, and after-validation hooks. A `SkirFormRequest` additionally provides the typed `$request->skir()` method described in [Generated procedures](generated-procedures.md#request-hydration-and-validation).
+
+Failures raised while Laravel resolves these dependencies use SkirRPC error responses rather than Laravel's normal validation redirect or JSON shape:
+
+- failed validation returns HTTP `422` with error code `skir_validation_failed` and field errors in `error.details`;
+- failed Form Request authorization returns HTTP `403` with error code `skir_authorization_failed`.
+
+Exceptions thrown by controller business logic continue through Laravel's normal exception handling.
 
 Before controller middleware and Form Requests run, the server creates a method-scoped clone of the transport request. Its input bags contain only the decoded Skir method payload—not the outer RPC envelope or transport query parameters. JSON calls receive the payload in the JSON bag, GET and HEAD calls in the query bag, and other calls in the request bag. The other input bags and uploaded files are cleared.
 

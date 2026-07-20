@@ -87,8 +87,8 @@ Generated Form Requests start with `authorize()` returning `false` and an empty 
 ### Selection and layout options
 
 - `--all` selects every manifest method and cannot be combined with `--module` or `--method`.
-- `--module=<module>` selects every method in an exact manifest module. Repeat the option to select several modules.
-- `--method=<module.method>` selects one exact method ID. Repeat the option to select several methods.
+- `--module=<module>` prefers an exact manifest module name and otherwise accepts one unique case-insensitive match. Ambiguous case-insensitive matches fail and require the exact case-sensitive name. Repeat the option to select several modules.
+- `--method=<module.method>` prefers an exact method ID and otherwise accepts one unique case-insensitive match. Ambiguous case-insensitive matches fail and require the exact case-sensitive ID. Repeat the option to select several methods.
 - `--style=module` creates one controller per module.
 - `--style=invokable` creates one invokable controller per method.
 - `--style=single` writes the selection to one controller. Use `--controller='App\Skir\AccountController'` to select its fully qualified class; `--controller` implies the `single` style when no style is given.
@@ -97,6 +97,8 @@ Generated Form Requests start with `authorize()` returning `false` and an empty 
 - `--generate` runs `generator_command` before manifest selection.
 
 Interactive mode prompts for the selection, layout, Form Request preference, and confirmation when their values are not supplied. Non-interactive calls must pass `--all`, `--module`, or `--method`.
+
+The positional method passed to `skir:make-request` must be an exact, case-sensitive manifest method ID; that command does not apply the case-insensitive fallback.
 
 ## Register the scaffolded controllers
 
