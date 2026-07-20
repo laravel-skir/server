@@ -149,7 +149,7 @@ Route::skirRpc('/api/skir', [
 
 Only public controller methods carrying a `SkirMethod` attribute are registered. The generated enum case identifies the Skir method; the PHP method name does not.
 
-The `studio()` call explicitly enables the endpoint-scoped Studio at `/api/skir?studio`, regardless of the configured default. Configuration can also enable Studio globally or change its query key. See [Routing and Studio](docs/routing.md#studio) for the available routing layouts and alternatives.
+The `studio()` call explicitly enables the endpoint-scoped Studio regardless of the configured default. With the default query key, Studio is available at `/api/skir?studio`. Configuration can also enable Studio globally or change its query key. See [Routing and Studio](docs/routing.md#studio) for the available routing layouts and alternatives.
 
 ## Optional client package
 

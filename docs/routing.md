@@ -239,7 +239,7 @@ Route::skirRpc('/api/skir', [
 ])->studio();
 ```
 
-Calling `studio()` explicitly enables Studio for that endpoint, regardless of `studio_enabled`. Open `/api/skir?studio` with a GET request. Only the query parameter's presence matters; its value is ignored. Studio renders only the procedures registered on that route, so separate endpoints keep separate procedure lists.
+Calling `studio()` explicitly enables Studio for that endpoint, regardless of `studio_enabled`. With the default query key, open `/api/skir?studio` with a GET request. Only the query parameter's presence matters; its value is ignored. Studio renders only the procedures registered on that route, so separate endpoints keep separate procedure lists.
 
 Set `studio_enabled` to `true` to enable Studio for every SkirRPC route by default. Calling `studio(false)` on a route overrides that global setting and keeps Studio disabled for that endpoint.
 
