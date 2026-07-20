@@ -22,7 +22,19 @@ final class SkirServerServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/skir-server.php', 'skir-server');
 
         $this->app->singleton(ProcedureRegistry::class);
-        $this->app->singleton(SkirCodec::class, DenseJsonCodec::class);
+        $this->app->singleton(SkirCodec::class, function (): SkirCodec {
+            $codec = config('skir-server.codec', DenseJsonCodec::class);
+
+            if (! is_string($codec)) {
+                throw SkirServerException::invalidConfiguredCodec($codec);
+            }
+
+            if (! is_a($codec, SkirCodec::class, true)) {
+                throw SkirServerException::invalidConfiguredCodec($codec);
+            }
+
+            return $this->app->make($codec);
+        });
         $this->app->singleton(SkirServer::class);
     }
 
