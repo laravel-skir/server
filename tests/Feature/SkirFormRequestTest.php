@@ -7,11 +7,9 @@ namespace Skir\Server\Tests\Feature;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Http\Request;
-use Illuminate\Routing\Route as LaravelRoute;
-use Illuminate\Session\ArraySessionHandler;
-use Illuminate\Session\Store;
+use Illuminate\Foundation\Http\Middleware\TrimStrings;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Testing\TestResponse;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Validation\Validator;
 use InvalidArgumentException;
@@ -21,19 +19,21 @@ use Skir\Runtime\MethodDescriptor;
 use Skir\Runtime\Type;
 use Skir\Server\Codecs\SkirCodecs;
 use Skir\Server\Contracts\SkirMethodReference;
-use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
-use Skir\Server\Http\Requests\SkirMethodRequestScope;
 use Skir\Server\Hydration\SkirPayloadHydrator;
-use Skir\Server\RequestContext;
 use Skir\Server\SkirContext;
-use Skir\Server\SkirServer;
 use Skir\Server\Tests\TestCase;
-use Symfony\Component\HttpFoundation\InputBag;
 
 final class SkirFormRequestTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config(['app.key' => 'base64:'.base64_encode(str_repeat('a', 32))]);
+    }
+
     #[Test]
     public function ordinary_form_requests_run_the_native_laravel_lifecycle_from_the_decoded_bag(): void
     {
@@ -46,14 +46,14 @@ final class SkirFormRequestTest extends TestCase
             },
         );
 
-        $result = $this->invokeWithinMethodRequestScope(
+        $result = $this->postDecodedFormRequest(
             NativeFormRequestController::class,
             [
                 'id' => 42,
                 'name' => '  Maxim  ',
                 'metadata' => 'decoded',
             ],
-        );
+        )->assertOk()->json();
 
         $this->assertSame([
             'id' => 42,
@@ -97,14 +97,14 @@ final class SkirFormRequestTest extends TestCase
             },
         );
 
-        $result = $this->invokeWithinMethodRequestScope(
+        $result = $this->postDecodedFormRequest(
             NativeSkirFormRequestController::class,
             [
                 'id' => 42,
                 'name' => '  Maxim  ',
                 'metadata' => 'decoded',
             ],
-        );
+        )->assertOk()->json();
 
         $this->assertSame([
             'id' => 42,
@@ -143,14 +143,14 @@ final class SkirFormRequestTest extends TestCase
         LaravelDataContractSkirRequest::reset();
         LaravelDataFixture::reset();
 
-        $result = $this->invokeWithinMethodRequestScope(
+        $result = $this->postDecodedFormRequest(
             LaravelDataContractController::class,
             [
                 'id' => 42,
                 'name' => '  Laravel Data  ',
                 'metadata' => 'decoded',
             ],
-        );
+        )->assertOk()->json();
 
         $this->assertSame('Laravel Data', $result);
         $this->assertSame(1, LaravelDataFixture::$factoryCalls);
@@ -171,14 +171,14 @@ final class SkirFormRequestTest extends TestCase
         StandardPhpContractSkirRequest::reset();
         StandardPhpFixture::reset();
 
-        $result = $this->invokeWithinMethodRequestScope(
+        $result = $this->postDecodedFormRequest(
             StandardPhpContractController::class,
             [
                 'id' => 42,
                 'name' => '  Standard PHP  ',
                 'metadata' => 'decoded',
             ],
-        );
+        )->assertOk()->json();
 
         $this->assertSame('Standard PHP', $result);
         $this->assertSame(1, StandardPhpFixture::$factoryCalls);
@@ -271,11 +271,11 @@ final class SkirFormRequestTest extends TestCase
     {
         RenameUserFormController::$invocations = 0;
 
-        $result = $this->invokeWithinMethodRequestScope(RenameUserFormController::class, [
+        $result = $this->postDecodedFormRequest(RenameUserFormController::class, [
             'id' => 42,
             'name' => '  Maxim  ',
             'metadata' => 'preserved',
-        ]);
+        ])->assertOk()->json();
 
         $this->assertSame([
             'id' => 42,
@@ -296,11 +296,11 @@ final class SkirFormRequestTest extends TestCase
         RenameUserFormController::$invocations = 0;
         RenameUserFormController::$requestPayload = [];
 
-        $result = $this->invokeWithinMethodRequestScope(RenameUserFormController::class, [
+        $result = $this->postDecodedFormRequest(RenameUserFormController::class, [
             'id' => 42,
             'name' => '  Maxim  ',
             'metadata' => 'decoded',
-        ]);
+        ])->assertOk()->json();
 
         $this->assertSame([
             'id' => 42,
@@ -318,13 +318,15 @@ final class SkirFormRequestTest extends TestCase
     public function it_preserves_the_original_user_route_and_headers_during_authorization(): void
     {
         ContextAwareSkirRequest::$authorizationContext = [];
-        ContextFormController::$originalTransportPayload = [];
+        ContextFormController::$scopedPayload = [];
 
-        $this->invokeWithinMethodRequestScope(ContextFormController::class, [
-            'id' => 42,
-            'name' => 'Maxim',
-            'metadata' => 'preserved',
-        ]);
+        $this
+            ->postDecodedFormRequest(ContextFormController::class, [
+                'id' => 42,
+                'name' => 'Maxim',
+                'metadata' => 'preserved',
+            ])
+            ->assertOk();
 
         $this->assertSame([
             'userId' => 42,
@@ -332,9 +334,10 @@ final class SkirFormRequestTest extends TestCase
             'trace' => 'trace-123',
         ], ContextAwareSkirRequest::$authorizationContext);
         $this->assertSame([
-            'method' => 'RenameUser',
-            'request' => ['name' => 'outer'],
-        ], ContextFormController::$originalTransportPayload);
+            'id' => 42,
+            'name' => 'Maxim',
+            'metadata' => 'preserved',
+        ], ContextFormController::$scopedPayload);
     }
 
     #[Test]
@@ -342,20 +345,22 @@ final class SkirFormRequestTest extends TestCase
     {
         RenameUserFormController::$invocations = 0;
 
-        try {
-            $this->invokeWithinMethodRequestScope(RenameUserFormController::class, [
+        $this
+            ->postDecodedFormRequest(RenameUserFormController::class, [
                 'id' => 42,
                 'name' => '   ',
                 'metadata' => 'preserved',
+            ])
+            ->assertUnprocessable()
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_validation_failed',
+                    'message' => 'The given data was invalid.',
+                    'details' => [
+                        'name' => ['The name field is required.'],
+                    ],
+                ],
             ]);
-
-            $this->fail('A validation exception was not translated.');
-        } catch (SkirServerException $exception) {
-            $this->assertSame('skir_validation_failed', $exception->errorCode);
-            $this->assertSame([
-                'name' => ['The name field is required.'],
-            ], $exception->details);
-        }
 
         $this->assertSame(0, RenameUserFormController::$invocations);
     }
@@ -365,17 +370,19 @@ final class SkirFormRequestTest extends TestCase
     {
         UnauthorizedFormController::$invocations = 0;
 
-        try {
-            $this->invokeWithinMethodRequestScope(UnauthorizedFormController::class, [
+        $this
+            ->postDecodedFormRequest(UnauthorizedFormController::class, [
                 'id' => 42,
                 'name' => 'Maxim',
                 'metadata' => 'preserved',
+            ])
+            ->assertForbidden()
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_authorization_failed',
+                    'message' => 'This action is unauthorized.',
+                ],
             ]);
-
-            $this->fail('An authorization exception was not translated.');
-        } catch (SkirServerException $exception) {
-            $this->assertSame('skir_authorization_failed', $exception->errorCode);
-        }
 
         $this->assertSame(0, UnauthorizedFormController::$invocations);
     }
@@ -384,8 +391,9 @@ final class SkirFormRequestTest extends TestCase
     public function it_preserves_validation_exceptions_thrown_by_controller_business_logic(): void
     {
         $this->expectException(ValidationException::class);
+        $this->withoutExceptionHandling();
 
-        $this->invokeWithinMethodRequestScope(BusinessValidationController::class, [
+        $this->postDecodedFormRequest(BusinessValidationController::class, [
             'id' => 42,
             'name' => 'Maxim',
             'metadata' => 'preserved',
@@ -396,8 +404,9 @@ final class SkirFormRequestTest extends TestCase
     public function it_preserves_not_found_authorization_exceptions_thrown_by_controller_business_logic(): void
     {
         $this->expectException(AuthorizationException::class);
+        $this->withoutExceptionHandling();
 
-        $this->invokeWithinMethodRequestScope(BusinessAuthorizationController::class, [
+        $this->postDecodedFormRequest(BusinessAuthorizationController::class, [
             'id' => 42,
             'name' => 'Maxim',
             'metadata' => 'preserved',
@@ -427,48 +436,22 @@ final class SkirFormRequestTest extends TestCase
     }
 
     /** @param class-string $controller */
-    private function invokeWithinMethodRequestScope(string $controller, array $decodedPayload): mixed
+    private function postDecodedFormRequest(string $controller, array $decodedPayload): TestResponse
     {
         $route = Route::skirRpc('/native-form-request/{tenant}', [
             Skir::method(FormRequestSkirMethod::RenameUser, $controller),
         ], SkirCodecs::standardJson());
-        $route->parameters = ['tenant' => 'acme'];
+        $route->middleware('web');
+        $this->withoutMiddleware(TrimStrings::class);
+        $this->be(new GenericUser(['id' => 42]));
 
-        $transportRequest = Request::create(
-            '/native-form-request/acme?queryOnly=contamination',
-            'POST',
-            ['staleInput' => 'transport'],
-            [],
-            [],
-            [
-                'CONTENT_TYPE' => 'application/json',
-                'HTTP_X_SKIR_TRACE' => 'trace-123',
-            ],
-            '{"method":"RenameUser","request":{"name":"outer"}}',
-        );
-        $transportRequest->setJson(new InputBag([
-            'method' => 'RenameUser',
-            'request' => ['name' => 'outer'],
-        ]));
-        $transportRequest->setRouteResolver(static fn (): LaravelRoute => $route);
-        $session = new Store('skir-form-request', new ArraySessionHandler(120));
-        $session->put('skir_session', 'session-123');
-        $transportRequest->setLaravelSession($session);
-        $this->app->instance('request', $transportRequest);
-        $transportRequest->setUserResolver(static fn (): GenericUser => new GenericUser(['id' => 42]));
-
-        $server = $route->defaults['skirServer'] ?? null;
-        $this->assertInstanceOf(SkirServer::class, $server);
-        $context = new RequestContext($transportRequest, FormRequestSkirMethod::RenameUser->descriptor());
-
-        return app(SkirMethodRequestScope::class)->run(
-            $transportRequest,
-            $decodedPayload,
-            static fn (): mixed => $server
-                ->procedure('RenameUser')
-                ->prepare($decodedPayload, $context)
-                ->invoke(),
-        );
+        return $this
+            ->withSession(['skir_session' => 'session-123'])
+            ->withHeader('X-Skir-Trace', 'trace-123')
+            ->postJson('/native-form-request/acme?queryOnly=contamination', [
+                'method' => 'RenameUser',
+                'request' => $decodedPayload,
+            ]);
     }
 }
 
@@ -1025,11 +1008,11 @@ final class DirectPayloadController
 final class ContextFormController
 {
     /** @var array<string, mixed> */
-    public static array $originalTransportPayload = [];
+    public static array $scopedPayload = [];
 
     public function __invoke(ContextAwareSkirRequest $request, SkirContext $context): PreparedUserPayload
     {
-        self::$originalTransportPayload = $context->request->json()->all();
+        self::$scopedPayload = $context->request->json()->all();
 
         /** @var PreparedUserPayload $payload */
         $payload = $request->skir();

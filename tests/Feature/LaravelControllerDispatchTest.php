@@ -9,10 +9,12 @@ use Illuminate\Auth\GenericUser;
 use Illuminate\Container\Attributes\Config;
 use Illuminate\Http\Request;
 use Illuminate\Pipeline\Pipeline;
+use Illuminate\Routing\Attributes\Controllers\Authorize;
 use Illuminate\Routing\Attributes\Controllers\Middleware as ControllerMiddlewareAttribute;
 use Illuminate\Routing\Controller;
 use Illuminate\Routing\Controllers\HasMiddleware;
 use Illuminate\Routing\Route as LaravelRoute;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\Test;
 use Skir\Runtime\Field;
@@ -23,12 +25,12 @@ use Skir\Server\Codecs\SkirCodecs;
 use Skir\Server\Contracts\SkirMethodReference;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
-use Skir\Server\Http\Requests\SkirMethodRequestScope;
 use Skir\Server\RegisteredProcedure;
 use Skir\Server\RequestContext;
 use Skir\Server\SkirContext;
 use Skir\Server\SkirServer;
 use Skir\Server\Tests\TestCase;
+use Symfony\Component\HttpFoundation\Response;
 
 final class LaravelControllerDispatchTest extends TestCase
 {
@@ -43,6 +45,9 @@ final class LaravelControllerDispatchTest extends TestCase
         NativeDispatchController::$callActions = 0;
         NativeDispatchController::$contextObjectId = null;
         MiddlewareStateSkirRequest::reset();
+        ResponsePostProcessingMiddleware::$receivedSymfonyResponse = false;
+
+        app('router')->aliasMiddleware('test-auth', TestAuthenticationMiddleware::class);
     }
 
     #[Test]
@@ -124,32 +129,22 @@ final class LaravelControllerDispatchTest extends TestCase
     #[Test]
     public function controller_middleware_runs_before_form_request_preparation(): void
     {
-        $route = $this->registerController(
+        $this->registerController(
             '/middleware-state/{tenant}',
             MiddlewareStateController::class,
         );
-        $server = $this->serverFromRoute($route);
-        $context = $this->contextForRoute(
-            $route,
-            NativeDispatchMethod::MiddlewareState,
-            ['tenant' => 'outer-tenant'],
-        );
-
-        $prepared = $server->procedure('MiddlewareState')->prepare(['name' => 'Maxim'], $context);
 
         $this->assertSame(0, MiddlewareStateSkirRequest::$authorizations);
         $this->assertSame(0, MiddlewareStateSkirRequest::$ruleResolutions);
 
-        $result = (new Pipeline(app()))
-            ->send($context->request)
-            ->through($prepared->middleware)
-            ->then(fn (Request $request): mixed => app(SkirMethodRequestScope::class)->run(
-                $request,
-                ['name' => 'Maxim'],
-                static fn (): mixed => $prepared->invoke(),
-            ));
+        $this
+            ->postJson('/middleware-state/outer-tenant', [
+                'method' => 'MiddlewareState',
+                'request' => ['name' => 'Maxim'],
+            ])
+            ->assertOk()
+            ->assertContent('"Maxim"');
 
-        $this->assertSame('Maxim', $result);
         $this->assertSame(1, MiddlewareStateSkirRequest::$authorizations);
         $this->assertSame(1, MiddlewareStateSkirRequest::$ruleResolutions);
         $this->assertSame([
@@ -176,6 +171,99 @@ final class LaravelControllerDispatchTest extends TestCase
 
         $this->assertSame('short-circuited', $result);
         $this->assertSame(0, NativePayload::$hydrations);
+    }
+
+    #[Test]
+    public function method_middleware_protects_one_procedure_without_protecting_its_controller_sibling(): void
+    {
+        $this->registerController('/method-auth', MethodMiddlewareController::class);
+
+        $this
+            ->postJson('/method-auth', [
+                'method' => 'Login',
+                'request' => null,
+            ])
+            ->assertOk()
+            ->assertContent('"logged-in"');
+
+        $this
+            ->postJson('/method-auth', [
+                'method' => 'GetMe',
+                'request' => null,
+            ])
+            ->assertUnauthorized();
+
+        $this->be(new GenericUser(['id' => 42]));
+
+        $this
+            ->postJson('/method-auth', [
+                'method' => 'GetMe',
+                'request' => null,
+            ])
+            ->assertOk()
+            ->assertContent('"42"');
+    }
+
+    #[Test]
+    public function middleware_can_post_process_the_encoded_symfony_response(): void
+    {
+        $this->registerController('/post-processing', MethodMiddlewareController::class);
+
+        $this
+            ->postJson('/post-processing', [
+                'method' => 'PostProcess',
+                'request' => null,
+            ])
+            ->assertOk()
+            ->assertHeader('X-Skir-Middleware', 'applied')
+            ->assertContent('"encoded-first"');
+
+        $this->assertTrue(ResponsePostProcessingMiddleware::$receivedSymfonyResponse);
+    }
+
+    #[Test]
+    public function native_authorize_attributes_use_the_laravel_gate(): void
+    {
+        Gate::define(
+            'view-account',
+            static fn (?GenericUser $user): bool => $user?->getAuthIdentifier() === 42,
+        );
+        $this->registerController('/authorized-method', MethodMiddlewareController::class);
+
+        $this
+            ->postJson('/authorized-method', [
+                'method' => 'ViewAccount',
+                'request' => null,
+            ])
+            ->assertForbidden();
+
+        $this->be(new GenericUser(['id' => 42]));
+
+        $this
+            ->postJson('/authorized-method', [
+                'method' => 'ViewAccount',
+                'request' => null,
+            ])
+            ->assertOk()
+            ->assertContent('"account-visible"');
+    }
+
+    #[Test]
+    public function studio_bypasses_procedure_middleware_while_calls_remain_protected(): void
+    {
+        $this->registerController('/protected-studio', MethodMiddlewareController::class)->studio();
+
+        $this
+            ->get('/protected-studio?studio')
+            ->assertOk()
+            ->assertSee('GetMe');
+
+        $this
+            ->postJson('/protected-studio', [
+                'method' => 'GetMe',
+                'request' => null,
+            ])
+            ->assertUnauthorized();
     }
 
     #[Test]
@@ -248,6 +336,10 @@ enum NativeDispatchMethod implements SkirMethodReference
     case ShortCircuit;
     case NullablePosition;
     case ScalarUnion;
+    case Login;
+    case GetMe;
+    case PostProcess;
+    case ViewAccount;
 
     public function descriptor(): MethodDescriptor
     {
@@ -286,6 +378,30 @@ enum NativeDispatchMethod implements SkirMethodReference
                 'ScalarUnion',
                 6006,
                 Type::string(),
+                Type::string(),
+            ),
+            self::Login => new MethodDescriptor(
+                'Login',
+                6007,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::GetMe => new MethodDescriptor(
+                'GetMe',
+                6008,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::PostProcess => new MethodDescriptor(
+                'PostProcess',
+                6009,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::ViewAccount => new MethodDescriptor(
+                'ViewAccount',
+                6010,
+                Type::optional(Type::struct([])),
                 Type::string(),
             ),
         };
@@ -374,6 +490,36 @@ final class ScalarUnionController
     public function dispatch(string|int $request): string
     {
         return get_debug_type($request).":{$request}";
+    }
+}
+
+final class MethodMiddlewareController
+{
+    #[SkirMethod(NativeDispatchMethod::Login)]
+    public function login(): string
+    {
+        return 'logged-in';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::GetMe)]
+    #[ControllerMiddlewareAttribute('test-auth')]
+    public function getMe(SkirContext $context): string
+    {
+        return (string) $context->request->user()?->getAuthIdentifier();
+    }
+
+    #[SkirMethod(NativeDispatchMethod::PostProcess)]
+    #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
+    public function postProcess(): string
+    {
+        return 'encoded-first';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::ViewAccount)]
+    #[Authorize('view-account')]
+    public function viewAccount(): string
+    {
+        return 'account-visible';
     }
 }
 
@@ -514,6 +660,37 @@ final class ShortCircuitMiddleware
     public function handle(Request $request, Closure $next): string
     {
         return 'short-circuited';
+    }
+}
+
+final class TestAuthenticationMiddleware
+{
+    public function handle(Request $request, Closure $next): Response
+    {
+        if ($request->user() === null) {
+            return response()->json(['message' => 'Unauthenticated.'], Response::HTTP_UNAUTHORIZED);
+        }
+
+        return $next($request);
+    }
+}
+
+final class ResponsePostProcessingMiddleware
+{
+    public static bool $receivedSymfonyResponse = false;
+
+    public function handle(Request $request, Closure $next): Response
+    {
+        $response = $next($request);
+        self::$receivedSymfonyResponse = $response instanceof Response;
+
+        if (! $response instanceof Response) {
+            throw new \RuntimeException('Procedure middleware must receive an encoded Symfony response.');
+        }
+
+        $response->headers->set('X-Skir-Middleware', 'applied');
+
+        return $response;
     }
 }
 

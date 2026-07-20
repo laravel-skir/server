@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace Skir\Server\Http\Controllers;
 
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\Request;
+use Illuminate\Pipeline\Pipeline;
 use JsonException;
 use Skir\Runtime\Exceptions\SkirRuntimeException;
 use Skir\Server\Codecs\SkirCodec;
 use Skir\Server\Codecs\SkirHttpCodec;
 use Skir\Server\Exceptions\SkirServerException;
+use Skir\Server\Http\Requests\SkirMethodRequestScope;
+use Skir\Server\RegisteredProcedure;
 use Skir\Server\RequestContext;
 use Skir\Server\SkirServer;
 use Skir\Server\Studio\StudioRenderer;
@@ -20,6 +24,8 @@ final readonly class SkirRpcController
     public function __construct(
         private SkirServer $server,
         private StudioRenderer $studioRenderer,
+        private Container $container,
+        private SkirMethodRequestScope $requestScope,
     ) {}
 
     public function __invoke(Request $request): Response
@@ -44,20 +50,44 @@ final readonly class SkirRpcController
             $procedure = $server->procedure($method);
             $requestPayload = array_key_exists('request', $payload) ? $payload['request'] : 0;
             $decodedRequest = $codec->decodeRequest($procedure->descriptor, $requestPayload);
-            $result = $procedure->invoke($decodedRequest, new RequestContext($request, $procedure->descriptor));
-            $encodedResponse = $codec->encodeResponse($procedure->descriptor, $result);
 
-            if ($codec instanceof SkirHttpCodec) {
-                return response($encodedResponse, Response::HTTP_OK)
-                    ->header('content-type', $codec->contentType());
-            }
+            return $this->requestScope->run(
+                $request,
+                $decodedRequest,
+                function (Request $methodRequest, mixed $decodedPayload) use ($codec, $procedure): Response {
+                    $context = new RequestContext($methodRequest, $procedure->descriptor);
+                    $prepared = $procedure->prepare($decodedPayload, $context);
 
-            return response()->json($encodedResponse, Response::HTTP_OK);
+                    return (new Pipeline($this->container))
+                        ->send($methodRequest)
+                        ->through($prepared->middleware)
+                        ->then(fn (): Response => $this->encodeResponse(
+                            $codec,
+                            $procedure,
+                            $prepared->invoke(),
+                        ));
+                },
+            );
         } catch (SkirServerException $exception) {
             return $exception->toResponse();
         } catch (SkirRuntimeException $exception) {
             return SkirServerException::invalidRequest($exception->getMessage())->toResponse();
         }
+    }
+
+    private function encodeResponse(
+        SkirCodec $codec,
+        RegisteredProcedure $procedure,
+        mixed $result,
+    ): Response {
+        $encodedResponse = $codec->encodeResponse($procedure->descriptor, $result);
+
+        if ($codec instanceof SkirHttpCodec) {
+            return response($encodedResponse, Response::HTTP_OK)
+                ->header('content-type', $codec->contentType());
+        }
+
+        return response()->json($encodedResponse, Response::HTTP_OK);
     }
 
     private function serverFromRequest(Request $request): SkirServer

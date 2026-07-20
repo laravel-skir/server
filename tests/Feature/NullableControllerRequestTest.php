@@ -6,10 +6,6 @@ namespace Skir\Server\Tests\Feature;
 
 use Illuminate\Auth\GenericUser;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Http\Request;
-use Illuminate\Routing\Route as LaravelRoute;
-use Illuminate\Session\ArraySessionHandler;
-use Illuminate\Session\Store;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use InvalidArgumentException;
@@ -21,12 +17,8 @@ use Skir\Server\Contracts\SkirMethodReference;
 use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
-use Skir\Server\Http\Requests\SkirMethodRequestScope;
-use Skir\Server\RequestContext;
 use Skir\Server\SkirContext;
-use Skir\Server\SkirServer;
 use Skir\Server\Tests\TestCase;
-use Symfony\Component\HttpFoundation\InputBag;
 use TypeError;
 
 final class NullableControllerRequestTest extends TestCase
@@ -288,39 +280,16 @@ final class NullableControllerRequestTest extends TestCase
     /** @param array<string, mixed> $decodedPayload */
     private function invokeNonNullFormRequest(array $decodedPayload): mixed
     {
-        $route = Route::skirRpc('/nullable-form-request/{tenant}', [
-            Skir::method(NullableRequestMethod::FormRequest, NullableFormRequestController::class),
-        ], SkirCodecs::standardJson());
-        $route->parameters = ['tenant' => 'acme'];
-        $transportRequest = Request::create(
-            '/nullable-form-request/acme',
-            'POST',
-            [],
-            [],
-            [],
-            ['CONTENT_TYPE' => 'application/json'],
-            '{"method":"FormRequest","request":{"name":"outer"}}',
-        );
-        $transportRequest->setJson(new InputBag([
-            'method' => 'FormRequest',
-            'request' => ['name' => 'outer'],
-        ]));
-        $transportRequest->setRouteResolver(static fn (): LaravelRoute => $route);
-        $transportRequest->setLaravelSession(new Store('nullable-form-request', new ArraySessionHandler(120)));
-        $this->app->instance('request', $transportRequest);
+        $this->registerRoute(NullableRequestMethod::FormRequest, NullableFormRequestController::class);
 
-        $server = $route->defaults['skirServer'] ?? null;
-        $this->assertInstanceOf(SkirServer::class, $server);
-        $context = new RequestContext($transportRequest, NullableRequestMethod::FormRequest->descriptor());
-
-        return app(SkirMethodRequestScope::class)->run(
-            $transportRequest,
-            $decodedPayload,
-            static fn (): mixed => $server
-                ->procedure('FormRequest')
-                ->prepare($decodedPayload, $context)
-                ->invoke(),
-        );
+        return $this
+            ->withSession([])
+            ->postJson('/nullable-form-request/acme', [
+                'method' => 'FormRequest',
+                'request' => $decodedPayload,
+            ])
+            ->assertOk()
+            ->json();
     }
 
     private function routePath(NullableRequestMethod $method): string

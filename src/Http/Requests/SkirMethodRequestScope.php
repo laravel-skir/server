@@ -27,8 +27,14 @@ final readonly class SkirMethodRequestScope
         $methodRequest->files->replace([]);
         $methodRequest->setJson(new InputBag);
 
-        if (is_array($payload)) {
-            $methodRequest->replace($payload);
+        $decodedInput = new InputBag(is_array($payload) ? $payload : []);
+
+        if ($methodRequest->isJson()) {
+            $methodRequest->setJson($decodedInput);
+        }
+
+        if (! $methodRequest->isJson()) {
+            $methodRequest->request = $decodedInput;
         }
 
         $this->bindRequest($methodRequest, $methodUserResolver);
