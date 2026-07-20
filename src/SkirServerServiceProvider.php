@@ -76,7 +76,10 @@ final class SkirServerServiceProvider extends ServiceProvider
 
         $router->macro('skirRpc', function (string $uri, array $providers = [], ?SkirCodec $codec = null) use ($resolveProvider) {
             /** @var Router $this */
-            $route = $this->match(['GET', 'POST'], $uri, SkirRpcController::class);
+            $route = $this
+                ->match(['GET', 'POST'], $uri, SkirRpcController::class)
+                ->defaults('skirStudioEnabled', (bool) config('skir-server.studio_enabled', false))
+                ->defaults('skirStudioQueryKey', (string) config('skir-server.studio_query_key', 'studio'));
 
             if ($providers === []) {
                 if ($codec === null) {

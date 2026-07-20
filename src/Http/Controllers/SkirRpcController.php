@@ -73,7 +73,13 @@ final readonly class SkirRpcController
 
     private function isStudioRequest(Request $request): bool
     {
-        return $request->isMethod('GET') && $request->query->has('studio');
+        if (! $request->isMethod('GET')) {
+            return false;
+        }
+
+        $queryKey = (string) ($request->route()?->defaults['skirStudioQueryKey'] ?? 'studio');
+
+        return $request->query->has($queryKey);
     }
 
     private function studioEnabled(Request $request): bool

@@ -33,6 +33,60 @@ final class SkirServerConfigurationTest extends TestCase
     }
 
     #[Test]
+    public function studio_can_be_enabled_by_configuration(): void
+    {
+        config(['skir-server.studio_enabled' => true]);
+
+        Route::skirRpc('/configured-studio', [
+            new ConfigurationProcedureProvider,
+        ]);
+
+        $this
+            ->get('/configured-studio?studio')
+            ->assertOk()
+            ->assertHeader('content-type', 'text/html; charset=UTF-8')
+            ->assertSee('Skir RPC Studio');
+    }
+
+    #[Test]
+    public function studio_can_be_disabled_on_a_route_when_enabled_by_configuration(): void
+    {
+        config(['skir-server.studio_enabled' => true]);
+
+        Route::skirRpc('/disabled-configured-studio', [
+            new ConfigurationProcedureProvider,
+        ])->studio(false);
+
+        $this
+            ->get('/disabled-configured-studio?studio')
+            ->assertNotFound();
+    }
+
+    #[Test]
+    public function studio_query_key_can_be_configured(): void
+    {
+        config([
+            'skir-server.studio_enabled' => true,
+            'skir-server.studio_query_key' => 'skir-studio',
+        ]);
+
+        Route::skirRpc('/configured-studio-query-key', [
+            new ConfigurationProcedureProvider,
+        ]);
+
+        $this
+            ->get('/configured-studio-query-key?studio')
+            ->assertUnprocessable()
+            ->assertDontSee('Skir RPC Studio');
+
+        $this
+            ->get('/configured-studio-query-key?skir-studio')
+            ->assertOk()
+            ->assertHeader('content-type', 'text/html; charset=UTF-8')
+            ->assertSee('Skir RPC Studio');
+    }
+
+    #[Test]
     public function dense_json_is_the_default_codec(): void
     {
         $this->assertSame(DenseJsonCodec::class, config('skir-server.codec'));
