@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Skir\Server\Tests\Feature;
 
 use Closure;
+use Illuminate\Auth\GenericUser;
 use Illuminate\Container\Attributes\Config;
 use Illuminate\Http\Request;
 use Illuminate\Pipeline\Pipeline;
@@ -21,6 +22,7 @@ use Skir\Server\Attributes\SkirMethod;
 use Skir\Server\Codecs\SkirCodecs;
 use Skir\Server\Contracts\SkirMethodReference;
 use Skir\Server\Facades\Skir;
+use Skir\Server\Http\Requests\SkirFormRequest;
 use Skir\Server\RegisteredProcedure;
 use Skir\Server\RequestContext;
 use Skir\Server\SkirContext;
@@ -39,6 +41,7 @@ final class LaravelControllerDispatchTest extends TestCase
         NativeDependency::$resolutions = 0;
         NativeDispatchController::$callActions = 0;
         NativeDispatchController::$contextObjectId = null;
+        MiddlewareStateSkirRequest::reset();
     }
 
     #[Test]
@@ -117,6 +120,90 @@ final class LaravelControllerDispatchTest extends TestCase
         $this->assertSame('compatible:HasMiddleware', $procedure->invoke('compatible', $context));
     }
 
+    #[Test]
+    public function controller_middleware_runs_before_form_request_preparation(): void
+    {
+        $route = $this->registerController(
+            '/middleware-state/{tenant}',
+            MiddlewareStateController::class,
+        );
+        $server = $this->serverFromRoute($route);
+        $context = $this->contextForRoute(
+            $route,
+            NativeDispatchMethod::MiddlewareState,
+            ['tenant' => 'outer-tenant'],
+        );
+
+        $prepared = $server->procedure('MiddlewareState')->prepare(['name' => 'Maxim'], $context);
+
+        $this->assertSame(0, MiddlewareStateSkirRequest::$authorizations);
+        $this->assertSame(0, MiddlewareStateSkirRequest::$ruleResolutions);
+
+        $result = (new Pipeline(app()))
+            ->send($context->request)
+            ->through($prepared->middleware)
+            ->then(fn (Request $request): mixed => $prepared->invoke());
+
+        $this->assertSame('Maxim', $result);
+        $this->assertSame(1, MiddlewareStateSkirRequest::$authorizations);
+        $this->assertSame(1, MiddlewareStateSkirRequest::$ruleResolutions);
+        $this->assertSame([
+            'userId' => 42,
+            'tenant' => 'middleware-tenant',
+        ], MiddlewareStateSkirRequest::$authorizationContext);
+    }
+
+    #[Test]
+    public function short_circuiting_controller_middleware_avoids_parameter_preparation(): void
+    {
+        $route = $this->registerController('/short-circuit', ShortCircuitController::class);
+        $server = $this->serverFromRoute($route);
+        $context = $this->contextForRoute($route, NativeDispatchMethod::ShortCircuit);
+
+        $prepared = $server->procedure('ShortCircuit')->prepare(['name' => 'unused'], $context);
+
+        $this->assertSame(0, NativePayload::$hydrations);
+
+        $result = (new Pipeline(app()))
+            ->send($context->request)
+            ->through($prepared->middleware)
+            ->then(fn (Request $request): mixed => $prepared->invoke());
+
+        $this->assertSame('short-circuited', $result);
+        $this->assertSame(0, NativePayload::$hydrations);
+    }
+
+    #[Test]
+    public function nullable_markers_restore_null_by_parameter_position(): void
+    {
+        $route = $this->registerController(
+            '/nullable-position/{routeStatus}',
+            NullablePositionController::class,
+        );
+        $server = $this->serverFromRoute($route);
+        $context = $this->contextForRoute(
+            $route,
+            NativeDispatchMethod::NullablePosition,
+            ['routeStatus' => NativeNullableStatus::Active],
+        );
+
+        $prepared = $server->procedure('NullablePosition')->prepare(null, $context);
+
+        $this->assertSame('null:active', $prepared->invoke());
+    }
+
+    #[Test]
+    public function scalar_union_parameters_receive_the_decoded_request(): void
+    {
+        $route = $this->registerController('/scalar-union', ScalarUnionController::class);
+        $server = $this->serverFromRoute($route);
+        $context = $this->contextForRoute($route, NativeDispatchMethod::ScalarUnion);
+
+        $prepared = $server->procedure('ScalarUnion')->prepare('union-value', $context);
+
+        $this->assertSame('string:union-value', $prepared->invoke());
+    }
+
     /** @param class-string $controller */
     private function registerController(string $uri, string $controller): LaravelRoute
     {
@@ -134,10 +221,14 @@ final class LaravelControllerDispatchTest extends TestCase
         return $server;
     }
 
-    private function contextForRoute(LaravelRoute $route, NativeDispatchMethod $method): RequestContext
-    {
+    /** @param array<string, string|object|null> $parameters */
+    private function contextForRoute(
+        LaravelRoute $route,
+        NativeDispatchMethod $method,
+        array $parameters = [],
+    ): RequestContext {
         $request = Request::create($route->uri(), 'POST');
-        $route->parameters = [];
+        $route->parameters = $parameters;
         $request->setRouteResolver(fn (): LaravelRoute => $route);
 
         return new RequestContext($request, $method->descriptor());
@@ -148,6 +239,10 @@ enum NativeDispatchMethod implements SkirMethodReference
 {
     case Update;
     case HasMiddleware;
+    case MiddlewareState;
+    case ShortCircuit;
+    case NullablePosition;
+    case ScalarUnion;
 
     public function descriptor(): MethodDescriptor
     {
@@ -162,6 +257,30 @@ enum NativeDispatchMethod implements SkirMethodReference
                 'HasMiddleware',
                 6002,
                 Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::MiddlewareState => new MethodDescriptor(
+                'MiddlewareState',
+                6003,
+                Type::struct([Field::value('name', 0, Type::string())]),
+                Type::string(),
+            ),
+            self::ShortCircuit => new MethodDescriptor(
+                'ShortCircuit',
+                6004,
+                Type::struct([Field::value('name', 0, Type::string())]),
+                Type::string(),
+            ),
+            self::NullablePosition => new MethodDescriptor(
+                'NullablePosition',
+                6005,
+                Type::optional(Type::string()),
+                Type::string(),
+            ),
+            self::ScalarUnion => new MethodDescriptor(
+                'ScalarUnion',
+                6006,
+                Type::string(),
                 Type::string(),
             ),
         };
@@ -208,6 +327,105 @@ final class HasMiddlewareDispatchController implements HasMiddleware
     public function dispatch(#[Config('app.name')] string $applicationName): string
     {
         return $applicationName;
+    }
+}
+
+#[ControllerMiddlewareAttribute(MiddlewareStateInitializer::class)]
+final class MiddlewareStateController
+{
+    #[SkirMethod(NativeDispatchMethod::MiddlewareState)]
+    public function dispatch(MiddlewareStateSkirRequest $request): string
+    {
+        return (string) $request->input('name');
+    }
+}
+
+#[ControllerMiddlewareAttribute(ShortCircuitMiddleware::class)]
+final class ShortCircuitController
+{
+    #[SkirMethod(NativeDispatchMethod::ShortCircuit)]
+    public function dispatch(NativePayload $request): string
+    {
+        return $request->name;
+    }
+}
+
+final class NullablePositionController
+{
+    #[SkirMethod(NativeDispatchMethod::NullablePosition)]
+    public function dispatch(
+        ?NativeNullableStatus $request,
+        NativeNullableStatus $routeStatus,
+    ): string {
+        $requestValue = $request?->value ?? 'null';
+
+        return "{$requestValue}:{$routeStatus->value}";
+    }
+}
+
+final class ScalarUnionController
+{
+    #[SkirMethod(NativeDispatchMethod::ScalarUnion)]
+    public function dispatch(string|int $request): string
+    {
+        return get_debug_type($request).":{$request}";
+    }
+}
+
+final class MiddlewareStateSkirRequest extends SkirFormRequest
+{
+    /** @var array{userId?: mixed, tenant?: mixed} */
+    public static array $authorizationContext = [];
+
+    public static int $authorizations = 0;
+
+    public static int $ruleResolutions = 0;
+
+    public function authorize(): bool
+    {
+        self::$authorizations++;
+        self::$authorizationContext = [
+            'userId' => $this->user()?->getAuthIdentifier(),
+            'tenant' => $this->route('tenant'),
+        ];
+
+        return self::$authorizationContext === [
+            'userId' => 42,
+            'tenant' => 'middleware-tenant',
+        ];
+    }
+
+    /** @return array<string, array<int, string>> */
+    public function rules(): array
+    {
+        self::$ruleResolutions++;
+
+        return [
+            'name' => ['required', 'string'],
+        ];
+    }
+
+    public static function reset(): void
+    {
+        self::$authorizationContext = [];
+        self::$authorizations = 0;
+        self::$ruleResolutions = 0;
+    }
+
+    /** @return class-string<NativePayload> */
+    protected function skirClass(): string
+    {
+        return NativePayload::class;
+    }
+}
+
+enum NativeNullableStatus: string
+{
+    case Active = 'active';
+
+    public static function fromSkirValue(string $value): self
+    {
+        return self::from($value);
     }
 }
 
@@ -272,6 +490,25 @@ final class NativeHasMiddleware
         NativeDispatchRecorder::$events[] = 'has-middleware';
 
         return $next($request);
+    }
+}
+
+final class MiddlewareStateInitializer
+{
+    public function handle(Request $request, Closure $next): mixed
+    {
+        $request->setUserResolver(fn (): GenericUser => new GenericUser(['id' => 42]));
+        $request->route()?->setParameter('tenant', 'middleware-tenant');
+
+        return $next($request);
+    }
+}
+
+final class ShortCircuitMiddleware
+{
+    public function handle(Request $request, Closure $next): string
+    {
+        return 'short-circuited';
     }
 }
 

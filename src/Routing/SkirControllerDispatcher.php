@@ -25,7 +25,7 @@ final class SkirControllerDispatcher extends ControllerDispatcher
         $preparedParameters = $route->getAction('skirParameters');
 
         if ($preparedParameters instanceof PreparedControllerParameters) {
-            $parameters = $preparedParameters->restoreNulls($parameters);
+            $parameters = $preparedParameters->restoreNullParameters($parameters);
         }
 
         if (method_exists($controller, 'callAction')) {

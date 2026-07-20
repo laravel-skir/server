@@ -8,25 +8,25 @@ final readonly class PreparedControllerParameters
 {
     /**
      * @param  list<mixed>  $values
-     * @param  list<int>  $nullObjectIds
+     * @param  list<int>  $nullParameterIndexes
      */
     public function __construct(
         public array $values,
-        private array $nullObjectIds = [],
+        private array $nullParameterIndexes = [],
     ) {}
 
     /**
      * @param  list<mixed>  $values
      * @return list<mixed>
      */
-    public function restoreNulls(array $values): array
+    public function restoreNullParameters(array $values): array
     {
-        return array_map(
-            fn (mixed $value): mixed => is_object($value)
-                && in_array(spl_object_id($value), $this->nullObjectIds, true)
-                    ? null
-                    : $value,
-            $values,
-        );
+        foreach ($this->nullParameterIndexes as $parameterIndex) {
+            if (array_key_exists($parameterIndex, $values)) {
+                $values[$parameterIndex] = null;
+            }
+        }
+
+        return $values;
     }
 }

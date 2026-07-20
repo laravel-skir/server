@@ -44,10 +44,6 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
     {
         $route = $this->controllerRoute($context);
         $controller = $route->getController();
-        $preparedParameters = $this->prepareParameters($route, $controller, $request, $context);
-        $action = $route->getAction();
-        $action['skirParameters'] = $preparedParameters;
-        $route->setAction($action);
 
         $middleware = $this->router->resolveMiddleware(
             $route->controllerMiddleware(),
@@ -56,9 +52,23 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
 
         return new PreparedProcedure(
             $middleware,
-            fn (): mixed => $this->normalizeResponse(
-                $this->dispatcher->dispatch($route, $controller, $this->method),
-            ),
+            fn (): mixed => $this->invokePrepared($route, $controller, $request, $context),
+        );
+    }
+
+    private function invokePrepared(
+        Route $route,
+        object $controller,
+        mixed $request,
+        SkirContext $context,
+    ): mixed {
+        $preparedParameters = $this->prepareParameters($controller, $request, $context);
+        $action = $route->getAction();
+        $action['skirParameters'] = $preparedParameters;
+        $route->setAction($action);
+
+        return $this->normalizeResponse(
+            $this->dispatcher->dispatch($route, $controller, $this->method),
         );
     }
 
@@ -82,22 +92,23 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
     }
 
     private function prepareParameters(
-        Route $route,
         object $controller,
         mixed $request,
         SkirContext $context,
     ): PreparedControllerParameters {
         $reflection = new ReflectionMethod($controller, $this->method);
         $values = [];
-        $nullObjectIds = [];
+        $nullParameterIndexes = [];
+        $outerRoute = $context->request->route();
 
-        foreach ($reflection->getParameters() as $parameter) {
+        foreach ($reflection->getParameters() as $parameterIndex => $parameter) {
             if (Util::getContextualAttributeFromDependency($parameter) !== null) {
                 continue;
             }
 
             $type = $parameter->getType();
             $typeName = $type instanceof ReflectionNamedType ? $type->getName() : null;
+            $isBuiltin = $type instanceof ReflectionNamedType && $type->isBuiltin();
 
             if ($typeName === SkirContext::class || $typeName === RequestContext::class) {
                 $values[] = $context;
@@ -105,8 +116,8 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
                 continue;
             }
 
-            if ($route->hasParameter($parameter->getName())) {
-                $values[] = $route->parameter($parameter->getName());
+            if ($outerRoute instanceof Route && $outerRoute->hasParameter($parameter->getName())) {
+                $values[] = $outerRoute->parameter($parameter->getName());
 
                 continue;
             }
@@ -116,7 +127,7 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
                     /** @var class-string<SkirFormRequest> $typeName */
                     $marker = $this->formRequestResolver->authorizeNull($typeName, $context);
                     $values[] = $marker;
-                    $nullObjectIds[] = spl_object_id($marker);
+                    $nullParameterIndexes[] = $parameterIndex;
 
                     continue;
                 }
@@ -142,12 +153,12 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
 
                 if ($marker !== null) {
                     $values[] = $marker;
-                    $nullObjectIds[] = spl_object_id($marker);
+                    $nullParameterIndexes[] = $parameterIndex;
 
                     continue;
                 }
 
-                if ($typeName === null || $type->isBuiltin()) {
+                if ($typeName === null || $isBuiltin) {
                     $values[] = null;
                 }
 
@@ -161,12 +172,12 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
                 continue;
             }
 
-            if ($typeName === null || $type->isBuiltin()) {
+            if ($typeName === null || $isBuiltin) {
                 $values[] = $request;
             }
         }
 
-        return new PreparedControllerParameters($values, $nullObjectIds);
+        return new PreparedControllerParameters($values, $nullParameterIndexes);
     }
 
     private function isFormRequest(?string $typeName): bool
