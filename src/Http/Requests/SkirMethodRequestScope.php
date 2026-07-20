@@ -7,6 +7,7 @@ namespace Skir\Server\Http\Requests;
 use Closure;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Request as RequestFacade;
 use Symfony\Component\HttpFoundation\InputBag;
 
 final readonly class SkirMethodRequestScope
@@ -17,7 +18,9 @@ final readonly class SkirMethodRequestScope
     public function run(Request $transportRequest, mixed $payload, Closure $callback): mixed
     {
         $originalRequest = $this->container->make('request');
+        $originalUserResolver = $originalRequest->getUserResolver();
         $methodRequest = Request::createFrom($transportRequest);
+        $methodUserResolver = $methodRequest->getUserResolver();
 
         $methodRequest->query->replace([]);
         $methodRequest->request->replace([]);
@@ -28,12 +31,19 @@ final readonly class SkirMethodRequestScope
             $methodRequest->replace($payload);
         }
 
-        $this->container->instance('request', $methodRequest);
+        $this->bindRequest($methodRequest, $methodUserResolver);
 
         try {
             return $callback($methodRequest, $payload);
         } finally {
-            $this->container->instance('request', $originalRequest);
+            $this->bindRequest($originalRequest, $originalUserResolver);
         }
+    }
+
+    private function bindRequest(Request $request, Closure $userResolver): void
+    {
+        $this->container->instance('request', $request);
+        $request->setUserResolver($userResolver);
+        RequestFacade::clearResolvedInstance('request');
     }
 }

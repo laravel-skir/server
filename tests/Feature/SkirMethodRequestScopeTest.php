@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Session\ArraySessionHandler;
 use Illuminate\Session\Store;
+use Illuminate\Support\Facades\Request as RequestFacade;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
@@ -19,6 +20,44 @@ use Symfony\Component\HttpFoundation\InputBag;
 
 final class SkirMethodRequestScopeTest extends TestCase
 {
+    #[Test]
+    public function it_synchronizes_a_pre_warmed_request_facade_with_the_method_scope(): void
+    {
+        $transportEnvelope = [
+            'method' => 'RenameUser',
+            'request' => ['name' => 'Transport'],
+        ];
+        $transportRequest = Request::create(
+            '/skir',
+            'POST',
+            [],
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json'],
+            '{"method":"RenameUser","request":{"name":"Transport"}}',
+        );
+        $transportRequest->setJson(new InputBag($transportEnvelope));
+        $this->app->instance('request', $transportRequest);
+        RequestFacade::clearResolvedInstance('request');
+
+        $this->assertSame($transportRequest, RequestFacade::getFacadeRoot());
+        $this->assertSame($transportEnvelope, RequestFacade::input());
+
+        (new SkirMethodRequestScope($this->app))->run(
+            $transportRequest,
+            ['name' => 'Scoped'],
+            function (Request $methodRequest): void {
+                self::assertSame($methodRequest, app('request'));
+                self::assertSame($methodRequest, RequestFacade::getFacadeRoot());
+                self::assertSame(['name' => 'Scoped'], RequestFacade::input());
+            },
+        );
+
+        $this->assertSame($transportRequest, app('request'));
+        $this->assertSame($transportRequest, RequestFacade::getFacadeRoot());
+        $this->assertSame($transportEnvelope, RequestFacade::input());
+    }
+
     #[Test]
     public function it_scopes_the_laravel_request_to_the_decoded_method_payload(): void
     {
@@ -104,8 +143,22 @@ final class SkirMethodRequestScopeTest extends TestCase
     #[Test]
     public function it_restores_the_transport_request_when_dispatch_throws(): void
     {
-        $transportRequest = Request::create('/skir', 'POST');
+        $transportEnvelope = [
+            'method' => 'RenameUser',
+            'request' => ['name' => 'Transport'],
+        ];
+        $transportRequest = Request::create(
+            '/skir',
+            'POST',
+            [],
+            [],
+            [],
+            ['CONTENT_TYPE' => 'application/json'],
+            '{"method":"RenameUser","request":{"name":"Transport"}}',
+        );
+        $transportRequest->setJson(new InputBag($transportEnvelope));
         $this->app->instance('request', $transportRequest);
+        RequestFacade::clearResolvedInstance('request');
         $methodRequest = null;
 
         try {
@@ -116,6 +169,8 @@ final class SkirMethodRequestScopeTest extends TestCase
                     $methodRequest = $scopedRequest;
 
                     self::assertSame($scopedRequest, app('request'));
+                    self::assertSame($scopedRequest, RequestFacade::getFacadeRoot());
+                    self::assertSame(['name' => 'Maxim'], RequestFacade::input());
 
                     throw new RuntimeException('dispatch failed');
                 },
@@ -129,6 +184,74 @@ final class SkirMethodRequestScopeTest extends TestCase
         $this->assertInstanceOf(Request::class, $methodRequest);
         $this->assertNotSame($transportRequest, $methodRequest);
         $this->assertSame($transportRequest, app('request'));
+        $this->assertSame($transportRequest, RequestFacade::getFacadeRoot());
+        $this->assertSame($transportEnvelope, RequestFacade::input());
+    }
+
+    #[Test]
+    public function it_preserves_a_custom_user_resolver_across_the_method_scope(): void
+    {
+        $transportRequest = Request::create('/skir', 'POST');
+        $sentinelUser = new GenericUser(['id' => 99]);
+        $customUserResolver = static fn (?string $guard = null): GenericUser => $sentinelUser;
+        $this->app->instance('request', $transportRequest);
+        $transportRequest->setUserResolver($customUserResolver);
+        RequestFacade::clearResolvedInstance('request');
+
+        (new SkirMethodRequestScope($this->app))->run(
+            $transportRequest,
+            ['name' => 'Maxim'],
+            function (Request $methodRequest) use ($customUserResolver, $sentinelUser): void {
+                self::assertSame($customUserResolver, $methodRequest->getUserResolver());
+                self::assertSame($sentinelUser, $methodRequest->user());
+                self::assertSame($methodRequest, RequestFacade::getFacadeRoot());
+                self::assertSame($sentinelUser, RequestFacade::user());
+            },
+        );
+
+        $this->assertSame($transportRequest, app('request'));
+        $this->assertSame($customUserResolver, $transportRequest->getUserResolver());
+        $this->assertSame($sentinelUser, $transportRequest->user());
+        $this->assertSame($sentinelUser, app('request')->user());
+        $this->assertSame($transportRequest, RequestFacade::getFacadeRoot());
+        $this->assertSame($sentinelUser, RequestFacade::user());
+    }
+
+    #[Test]
+    public function it_restores_container_and_facade_requests_across_nested_scopes(): void
+    {
+        $transportRequest = Request::create('/skir', 'POST');
+        $this->app->instance('request', $transportRequest);
+        RequestFacade::clearResolvedInstance('request');
+        $scope = new SkirMethodRequestScope($this->app);
+
+        $scope->run(
+            $transportRequest,
+            ['scope' => 'outer'],
+            function (Request $outerRequest) use ($scope): void {
+                self::assertSame($outerRequest, app('request'));
+                self::assertSame($outerRequest, RequestFacade::getFacadeRoot());
+                self::assertSame(['scope' => 'outer'], RequestFacade::input());
+
+                $scope->run(
+                    $outerRequest,
+                    ['scope' => 'inner'],
+                    function (Request $innerRequest): void {
+                        self::assertSame($innerRequest, app('request'));
+                        self::assertSame($innerRequest, RequestFacade::getFacadeRoot());
+                        self::assertSame(['scope' => 'inner'], RequestFacade::input());
+                    },
+                );
+
+                self::assertSame($outerRequest, app('request'));
+                self::assertSame($outerRequest, RequestFacade::getFacadeRoot());
+                self::assertSame(['scope' => 'outer'], RequestFacade::input());
+            },
+        );
+
+        $this->assertSame($transportRequest, app('request'));
+        $this->assertSame($transportRequest, RequestFacade::getFacadeRoot());
+        $this->assertSame([], RequestFacade::input());
     }
 
     /** @return iterable<string, array{mixed}> */
