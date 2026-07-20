@@ -245,6 +245,28 @@ final class SkirFormRequestTest extends TestCase
     }
 
     #[Test]
+    public function it_rejects_magic_static_factory_fallbacks_without_invoking_them(): void
+    {
+        $hydrator = app(SkirPayloadHydrator::class);
+        MagicStaticFactoryFixture::$invocations = 0;
+
+        $this->assertFalse($hydrator->supports(MagicStaticFactoryFixture::class));
+
+        try {
+            $hydrator->hydrate(MagicStaticFactoryFixture::class, []);
+
+            $this->fail('A magic static fallback was accepted as a Skir payload factory.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString(
+                'does not define a supported Skir payload factory',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertSame(0, MagicStaticFactoryFixture::$invocations);
+    }
+
+    #[Test]
     public function it_validates_only_the_decoded_payload_and_hydrates_the_prepared_payload(): void
     {
         RenameUserFormController::$invocations = 0;
@@ -833,6 +855,18 @@ final class InaccessibleFactoryFixture
 {
     private static function makeFromSkirPayload(array $payload): self
     {
+        return new self;
+    }
+}
+
+final class MagicStaticFactoryFixture
+{
+    public static int $invocations = 0;
+
+    public static function __callStatic(string $name, array $arguments): self
+    {
+        self::$invocations++;
+
         return new self;
     }
 }
