@@ -87,6 +87,35 @@ final class SkirServerConfigurationTest extends TestCase
     }
 
     #[Test]
+    public function studio_configuration_is_snapshotted_when_the_route_is_registered(): void
+    {
+        config([
+            'skir-server.studio_enabled' => true,
+            'skir-server.studio_query_key' => 'registered-studio',
+        ]);
+
+        Route::skirRpc('/snapshotted-studio', [
+            new ConfigurationProcedureProvider,
+        ]);
+
+        config([
+            'skir-server.studio_enabled' => false,
+            'skir-server.studio_query_key' => 'changed-studio',
+        ]);
+
+        $this
+            ->get('/snapshotted-studio?registered-studio')
+            ->assertOk()
+            ->assertHeader('content-type', 'text/html; charset=UTF-8')
+            ->assertSee('Skir RPC Studio');
+
+        $this
+            ->get('/snapshotted-studio?changed-studio')
+            ->assertUnprocessable()
+            ->assertDontSee('Skir RPC Studio');
+    }
+
+    #[Test]
     public function dense_json_is_the_default_codec(): void
     {
         $this->assertSame(DenseJsonCodec::class, config('skir-server.codec'));
@@ -118,6 +147,43 @@ final class SkirServerConfigurationTest extends TestCase
         $this->expectExceptionMessage('Configured codec construction failed.');
 
         app(SkirCodec::class);
+    }
+
+    #[Test]
+    public function an_unbound_abstract_configured_codec_is_rejected(): void
+    {
+        config(['skir-server.codec' => AbstractConfiguredCodec::class]);
+
+        $this->expectException(SkirServerException::class);
+        $this->expectExceptionMessage(
+            'Configured Skir codec ['.AbstractConfiguredCodec::class.'] must implement '
+            .'[Skir\\Server\\Codecs\\SkirCodec].',
+        );
+
+        app(SkirCodec::class);
+    }
+
+    #[Test]
+    public function the_codec_contract_cannot_be_configured_as_its_own_implementation(): void
+    {
+        config(['skir-server.codec' => SkirCodec::class]);
+
+        $this->expectException(SkirServerException::class);
+        $this->expectExceptionMessage(
+            'Configured Skir codec ['.SkirCodec::class.'] must implement '
+            .'[Skir\\Server\\Codecs\\SkirCodec].',
+        );
+
+        app(SkirCodec::class);
+    }
+
+    #[Test]
+    public function a_container_bound_codec_abstraction_can_be_configured(): void
+    {
+        config(['skir-server.codec' => AbstractConfiguredCodec::class]);
+        $this->app->bind(AbstractConfiguredCodec::class, ContainerBoundConfiguredCodec::class);
+
+        $this->assertInstanceOf(ContainerBoundConfiguredCodec::class, app(SkirCodec::class));
     }
 
     #[Test]
@@ -223,6 +289,21 @@ final class FailingConfiguredCodec implements SkirCodec
         return $response;
     }
 }
+
+abstract class AbstractConfiguredCodec implements SkirCodec
+{
+    public function decodeRequest(MethodDescriptor $descriptor, mixed $request): mixed
+    {
+        return $request;
+    }
+
+    public function encodeResponse(MethodDescriptor $descriptor, mixed $response): mixed
+    {
+        return $response;
+    }
+}
+
+final class ContainerBoundConfiguredCodec extends AbstractConfiguredCodec {}
 
 final class ExplicitCodec implements SkirCodec
 {
