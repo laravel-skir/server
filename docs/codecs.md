@@ -1,10 +1,30 @@
 # Codecs
 
-A codec controls how a SkirRPC endpoint decodes request values and encodes response values. Choose it per endpoint with the third argument to `Route::skirRpc()`.
+A codec controls how SkirRPC endpoints decode request values and encode response values. Configure a package-wide default or select a codec per route with the third argument to `Route::skirRpc()`.
+
+## Default codec
+
+The shipped configuration uses dense JSON. To use standard JSON as the package-wide default, publish the configuration and set `codec` to `StandardJsonCodec::class`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+use Skir\Server\Codecs\StandardJsonCodec;
+
+return [
+    'studio_enabled' => env('SKIR_SERVER_STUDIO_ENABLED', false),
+    'studio_query_key' => env('SKIR_SERVER_STUDIO_QUERY_KEY', 'studio'),
+    'codec' => StandardJsonCodec::class,
+];
+```
+
+The codec class is resolved through Laravel's container and must implement `Skir\Server\Codecs\SkirCodec`. The built-in codec classes are `DenseJsonCodec`, `StandardJsonCodec`, `Base64DenseJsonCodec`, and `CborCodec`, all in the `Skir\Server\Codecs` namespace. An explicit codec passed as the third argument to `Route::skirRpc()` overrides the configured default for that route.
 
 ## Dense JSON
 
-Dense JSON is the default. It uses the generated method descriptor to decode and encode Skir's compact JSON representation:
+Dense JSON uses the generated method descriptor to decode and encode Skir's compact JSON representation:
 
 ```php
 use App\Http\Skir\UserController;

@@ -21,7 +21,7 @@ SkirRPC offers many of the same benefits as gRPC—shared method definitions, ge
 - Generate typed server contracts with either the Laravel Data or standard PHP generator. See [Generated procedures](docs/generated-procedures.md).
 - Route procedures to attributed Laravel controllers, invokable controllers, generated providers, or manual handlers. See [Routing](docs/routing.md).
 - Inspect an endpoint's procedures through its opt-in Studio. See [Studio](docs/routing.md#studio).
-- Select dense JSON, standard JSON, base64 dense JSON, or CBOR per endpoint. See [Codecs](docs/codecs.md).
+- Configure dense JSON, standard JSON, base64 dense JSON, or CBOR package-wide or per endpoint. See [Codecs](docs/codecs.md).
 
 ## Quick start
 
@@ -31,6 +31,30 @@ Install the server package and the Laravel Data generator:
 composer require php-skir/server spatie/laravel-data
 npm install --save-dev skir skir-laravel-data-generator
 ```
+
+The package defaults work without publishing configuration. To customize them, publish `config/skir-server.php`:
+
+```bash
+php artisan vendor:publish --tag=skir-server-config
+```
+
+The published file contains:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+use Skir\Server\Codecs\DenseJsonCodec;
+
+return [
+    'studio_enabled' => env('SKIR_SERVER_STUDIO_ENABLED', false),
+    'studio_query_key' => env('SKIR_SERVER_STUDIO_QUERY_KEY', 'studio'),
+    'codec' => DenseJsonCodec::class,
+];
+```
+
+Calling `studio()` or `studio(false)` on a route overrides `studio_enabled`, while an explicit codec passed to `Route::skirRpc()` overrides `codec`. See [Routing and Studio](docs/routing.md#studio) and [Codecs](docs/codecs.md) for details.
 
 Define a Skir method:
 
@@ -125,7 +149,7 @@ Route::skirRpc('/api/skir', [
 
 Only public controller methods carrying a `SkirMethod` attribute are registered. The generated enum case identifies the Skir method; the PHP method name does not.
 
-The `studio()` call enables the endpoint-scoped Studio at `/api/skir?studio`. Studio is disabled unless it is enabled on the route. See [Routing and Studio](docs/routing.md#studio) for the available routing layouts and alternatives.
+The `studio()` call explicitly enables the endpoint-scoped Studio at `/api/skir?studio`, regardless of the configured default. Configuration can also enable Studio globally or change its query key. See [Routing and Studio](docs/routing.md#studio) for the available routing layouts and alternatives.
 
 ## Optional client package
 

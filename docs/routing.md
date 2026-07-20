@@ -220,6 +220,13 @@ GET requests are also supported. Pass the method and a JSON-encoded request valu
 
 ## Studio
 
+Studio is controlled by these settings in `config/skir-server.php`:
+
+```php
+'studio_enabled' => env('SKIR_SERVER_STUDIO_ENABLED', false),
+'studio_query_key' => env('SKIR_SERVER_STUDIO_QUERY_KEY', 'studio'),
+```
+
 Studio is disabled by default. Enable it on an individual endpoint with `studio()`:
 
 ```php
@@ -232,6 +239,10 @@ Route::skirRpc('/api/skir', [
 ])->studio();
 ```
 
-Open `/api/skir?studio` with a GET request. Studio renders only the procedures registered on that route, so separate endpoints keep separate procedure lists.
+Calling `studio()` explicitly enables Studio for that endpoint, regardless of `studio_enabled`. Open `/api/skir?studio` with a GET request. Only the query parameter's presence matters; its value is ignored. Studio renders only the procedures registered on that route, so separate endpoints keep separate procedure lists.
 
-Calling `studio(false)` explicitly keeps Studio disabled. In production applications, apply the application's normal routing middleware and authorization strategy to control access to enabled Studio routes.
+Set `studio_enabled` to `true` to enable Studio for every SkirRPC route by default. Calling `studio(false)` on a route overrides that global setting and keeps Studio disabled for that endpoint.
+
+Use `studio_query_key` to change the query parameter. For example, setting it to `skir-studio` makes the Studio URL `/api/skir?skir-studio`.
+
+In production, protect Studio with the route's normal middleware and authorization. The query key only selects the Studio response; it is not access control.
