@@ -121,6 +121,43 @@ final class SkirServerConfigurationTest extends TestCase
     }
 
     #[Test]
+    public function an_unbound_abstract_configured_codec_is_rejected(): void
+    {
+        config(['skir-server.codec' => AbstractConfiguredCodec::class]);
+
+        $this->expectException(SkirServerException::class);
+        $this->expectExceptionMessage(
+            'Configured Skir codec ['.AbstractConfiguredCodec::class.'] must implement '
+            .'[Skir\\Server\\Codecs\\SkirCodec].',
+        );
+
+        app(SkirCodec::class);
+    }
+
+    #[Test]
+    public function the_codec_contract_cannot_be_configured_as_its_own_implementation(): void
+    {
+        config(['skir-server.codec' => SkirCodec::class]);
+
+        $this->expectException(SkirServerException::class);
+        $this->expectExceptionMessage(
+            'Configured Skir codec ['.SkirCodec::class.'] must implement '
+            .'[Skir\\Server\\Codecs\\SkirCodec].',
+        );
+
+        app(SkirCodec::class);
+    }
+
+    #[Test]
+    public function a_container_bound_codec_abstraction_can_be_configured(): void
+    {
+        config(['skir-server.codec' => AbstractConfiguredCodec::class]);
+        $this->app->bind(AbstractConfiguredCodec::class, ContainerBoundConfiguredCodec::class);
+
+        $this->assertInstanceOf(ContainerBoundConfiguredCodec::class, app(SkirCodec::class));
+    }
+
+    #[Test]
     public function an_explicit_route_codec_overrides_the_configured_codec(): void
     {
         config(['skir-server.codec' => InvalidConfiguredCodec::class]);
@@ -223,6 +260,21 @@ final class FailingConfiguredCodec implements SkirCodec
         return $response;
     }
 }
+
+abstract class AbstractConfiguredCodec implements SkirCodec
+{
+    public function decodeRequest(MethodDescriptor $descriptor, mixed $request): mixed
+    {
+        return $request;
+    }
+
+    public function encodeResponse(MethodDescriptor $descriptor, mixed $response): mixed
+    {
+        return $response;
+    }
+}
+
+final class ContainerBoundConfiguredCodec extends AbstractConfiguredCodec {}
 
 final class ExplicitCodec implements SkirCodec
 {

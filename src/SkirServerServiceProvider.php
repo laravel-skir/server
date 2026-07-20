@@ -33,6 +33,16 @@ final class SkirServerServiceProvider extends ServiceProvider
                 throw SkirServerException::invalidConfiguredCodec($codec);
             }
 
+            if ($codec === SkirCodec::class) {
+                throw SkirServerException::invalidConfiguredCodec($codec);
+            }
+
+            if (! $this->app->bound($codec)) {
+                if (! (new ReflectionClass($codec))->isInstantiable()) {
+                    throw SkirServerException::invalidConfiguredCodec($codec);
+                }
+            }
+
             return $this->app->make($codec);
         });
         $this->app->singleton(SkirServer::class);
