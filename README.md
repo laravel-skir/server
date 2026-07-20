@@ -18,18 +18,20 @@ SkirRPC offers many of the same benefits as gRPC—shared method definitions, ge
 
 ## Features
 
-- Generate typed server contracts with either the Laravel Data or standard PHP generator. See [Generated procedures](docs/generated-procedures.md).
-- Route procedures to attributed Laravel controllers, invokable controllers, generated providers, or manual handlers. See [Routing](docs/routing.md).
+- Generate typed server contracts with Simple Data Objects, Laravel Data, or standard PHP objects. See [Generated procedures](docs/generated-procedures.md).
+- Scaffold application-owned controllers and Form Requests from generated manifests. See [Scaffolding](docs/scaffolding.md).
+- Route procedures to attributed or invokable Laravel controllers with native dependency injection, middleware, authorization, and Form Requests. See [Routing](docs/routing.md).
+- Keep generated providers and manual handlers available for non-controller layouts. See [Routing](docs/routing.md#generated-procedure-providers).
 - Inspect an endpoint's procedures through its opt-in Studio. See [Studio](docs/routing.md#studio).
 - Configure dense JSON, standard JSON, base64 dense JSON, or CBOR package-wide or per endpoint. See [Codecs](docs/codecs.md).
 
 ## Quick start
 
-Install the server package and the Laravel Data generator:
+Install the server package and one PHP generator. This example uses Simple Data Objects:
 
 ```bash
-composer require php-skir/server spatie/laravel-data
-npm install --save-dev skir skir-laravel-data-generator
+composer require php-skir/server std-out/simple-data-objects
+npm install --save-dev skir skir-simple-data-objects-generator
 ```
 
 The package defaults work without publishing configuration. To customize them, publish `config/skir-server.php`:
@@ -51,10 +53,24 @@ return [
     'studio_enabled' => env('SKIR_SERVER_STUDIO_ENABLED', false),
     'studio_query_key' => env('SKIR_SERVER_STUDIO_QUERY_KEY', 'studio'),
     'codec' => DenseJsonCodec::class,
+
+    'manifests' => [
+        base_path('app/Skir/skirout/skir-server-manifest.json'),
+    ],
+
+    'generator_command' => ['npx', 'skir', 'gen'],
+
+    'scaffolding' => [
+        'controller_style' => 'module',
+        'controller_namespace' => 'App\\Skir',
+        'single_controller' => 'App\\Skir\\SkirController',
+        'request_namespace' => 'App\\Http\\Requests\\Skir',
+        'form_requests' => true,
+    ],
 ];
 ```
 
-Calling `studio()` or `studio(false)` on a route overrides `studio_enabled`, while an explicit codec passed to `Route::skirRpc()` overrides `codec`. See [Routing and Studio](docs/routing.md#studio) and [Codecs](docs/codecs.md) for details.
+See [Scaffolding](docs/scaffolding.md) for manifest and controller-generation settings. Calling `studio()` or `studio(false)` on a route overrides `studio_enabled`, while an explicit codec passed to `Route::skirRpc()` overrides `codec`.
 
 Define a Skir method:
 
@@ -76,8 +92,8 @@ Configure the generator in `skir.yml`:
 
 ```yaml
 generators:
-  - mod: skir-laravel-data-generator
-    outDir: skir/skirout
+  - mod: skir-simple-data-objects-generator
+    outDir: app/Skir/skirout
     config:
       namespace: Skir
 ```
@@ -88,7 +104,7 @@ Generate the PHP contracts, configure Composer, and refresh the autoloader:
 
 ```bash
 npx skir gen
-npx skir-laravel-data-generator configure-composer
+npx skir-simple-data-objects-generator configure-composer
 composer dump-autoload
 ```
 
@@ -98,34 +114,40 @@ The `configure-composer` command reads `skir.yml` and adds this PSR-4 mapping to
 {
   "autoload": {
     "psr-4": {
-      "Skir\\": "skir/skirout/"
+      "Skir\\": "app/Skir/skirout/"
     }
   }
 }
 ```
 
-Keep controllers in the application-owned `App\Http\Skir` namespace and import the generated `Skir` classes:
+Keep controllers outside `skirout`; the default application-owned namespace is `App\Skir`. Scaffold every generated method and its Form Request with:
+
+```bash
+php artisan skir:make --all
+```
+
+Generated Form Requests deny access by default; define their `authorize()` and `rules()` methods before exposing the procedure. The command prints the route registrations to add. A module controller has this shape:
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-namespace App\Http\Skir;
+namespace App\Skir\Admin;
 
+use App\Http\Requests\Skir\Admin\GetUserFormRequest;
 use App\Models\User as UserModel;
 use Skir\Admin\AdminSkirMethod;
-use Skir\Admin\GetUserRequestData;
 use Skir\Admin\UserData;
 use Skir\Server\Attributes\SkirMethod;
-use Skir\Server\SkirContext;
 
-final class UserController
+final class AdminController
 {
     #[SkirMethod(AdminSkirMethod::GetUser)]
-    public function get(GetUserRequestData $request, SkirContext $context): UserData
+    public function getUser(GetUserFormRequest $request): UserData
     {
-        $user = UserModel::query()->findOrFail($request->userId);
+        $input = $request->skir();
+        $user = UserModel::query()->findOrFail($input->userId);
 
         return new UserData(
             userId: $user->id,
@@ -138,19 +160,19 @@ final class UserController
 Register the controller on a SkirRPC endpoint:
 
 ```php
-use App\Http\Skir\UserController;
+use App\Skir\Admin\AdminController;
 use Illuminate\Support\Facades\Route;
 use Skir\Server\Facades\Skir;
 
 Route::skirRpc('/api/skir', [
-    Skir::controller(UserController::class),
+    Skir::controller(AdminController::class),
 ])->studio();
 ```
 
 Only public controller methods carrying a `SkirMethod` attribute are registered. The generated enum case identifies the Skir method; the PHP method name does not.
 
-The `studio()` call explicitly enables the endpoint-scoped Studio regardless of the configured default. With the default query key, Studio is available at `/api/skir?studio`. Configuration can also enable Studio globally or change its query key. See [Routing and Studio](docs/routing.md#studio) for the available routing layouts and alternatives.
+The `studio()` call explicitly enables the endpoint-scoped Studio regardless of the configured default. With the default query key, Studio is available at `/api/skir?studio`. See [Routing and Studio](docs/routing.md#studio) for middleware, authorization, and alternative routing layouts.
 
 ## Optional client package
 
-The [`php-skir/client`](https://github.com/php-skir/client) package is not required to host a SkirRPC server. It normally belongs in the application consuming this endpoint. See [Generated procedures](docs/generated-procedures.md#optional-artisan-wrapper) for its optional generator wrapper.
+The [`php-skir/client`](https://github.com/php-skir/client) package is not required to host a SkirRPC server. It normally belongs in the application consuming this endpoint.
