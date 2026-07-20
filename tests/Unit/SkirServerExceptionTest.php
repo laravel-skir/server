@@ -69,6 +69,13 @@ final class SkirServerExceptionTest extends TestCase
                 'Configured Skir codec [App\\Codecs\\InvalidCodec] must implement '
                 .'[Skir\\Server\\Codecs\\SkirCodec].',
             ],
+            'invalid configured codec type' => [
+                SkirServerException::invalidConfiguredCodec(new InvalidConfiguredCodec),
+                'skir_invalid_configured_codec',
+                500,
+                'Configured Skir codec ['.InvalidConfiguredCodec::class.'] must implement '
+                .'[Skir\\Server\\Codecs\\SkirCodec].',
+            ],
             'missing CBOR dependency' => [
                 SkirServerException::missingCborDependency(),
                 'skir_missing_cbor_dependency',
@@ -80,3 +87,5 @@ final class SkirServerExceptionTest extends TestCase
 }
 
 final class InvalidRouteProvider {}
+
+final class InvalidConfiguredCodec {}
