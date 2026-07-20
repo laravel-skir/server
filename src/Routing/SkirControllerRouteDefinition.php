@@ -4,12 +4,9 @@ declare(strict_types=1);
 
 namespace Skir\Server\Routing;
 
-use Illuminate\Contracts\Container\Container;
 use ReflectionClass;
 use ReflectionMethod;
 use Skir\Server\Attributes\SkirMethod;
-use Skir\Server\Http\Requests\SkirFormRequestResolver;
-use Skir\Server\Hydration\SkirPayloadHydrator;
 use Skir\Server\SkirServer;
 
 final readonly class SkirControllerRouteDefinition implements SkirRouteDefinition
@@ -46,13 +43,10 @@ final readonly class SkirControllerRouteDefinition implements SkirRouteDefinitio
 
             $server->addMethod(
                 $descriptor,
-                new ControllerProcedureInvoker(
-                    $this->controller,
-                    $method->getName(),
-                    app(Container::class),
-                    app(SkirPayloadHydrator::class),
-                    app(SkirFormRequestResolver::class),
-                ),
+                app(ControllerProcedureInvoker::class, [
+                    'controller' => $this->controller,
+                    'method' => $method->getName(),
+                ]),
             );
         }
     }

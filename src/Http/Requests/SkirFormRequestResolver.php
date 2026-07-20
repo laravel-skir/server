@@ -42,7 +42,7 @@ final readonly class SkirFormRequestResolver
     }
 
     /** @param class-string<SkirFormRequest> $requestClass */
-    public function authorizeNull(string $requestClass, SkirContext $context): void
+    public function authorizeNull(string $requestClass, SkirContext $context): SkirFormRequest
     {
         $resolvedRequest = $this->makeRequest($requestClass, [], $context);
 
@@ -51,6 +51,8 @@ final readonly class SkirFormRequestResolver
         } catch (AuthorizationException) {
             throw SkirServerException::authorizationFailed();
         }
+
+        return $resolvedRequest;
     }
 
     /**

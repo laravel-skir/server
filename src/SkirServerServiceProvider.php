@@ -17,6 +17,7 @@ use Skir\Server\Commands\MakeSkirRequestCommand;
 use Skir\Server\Commands\SymfonyGeneratorRunner;
 use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\Http\Controllers\SkirRpcController;
+use Skir\Server\Routing\SkirControllerDispatcher;
 use Skir\Server\Routing\SkirRouteDefinition;
 use Skir\Server\Scaffolding\ControllerScaffolder;
 use Skir\Server\Scaffolding\ControllerScaffolding;
@@ -67,6 +68,7 @@ final class SkirServerServiceProvider extends ServiceProvider
         $this->app->singleton(ManifestRepository::class);
         $this->app->bind(GeneratorRunner::class, SymfonyGeneratorRunner::class);
         $this->app->bind(ControllerScaffolding::class, ControllerScaffolder::class);
+        $this->app->bind(SkirControllerDispatcher::class);
     }
 
     public function boot(): void
