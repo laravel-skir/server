@@ -7,6 +7,7 @@ namespace Skir\Server\Tests\Feature;
 use Closure;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Container\Attributes\Config;
+use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Http\Request;
 use Illuminate\Pipeline\Pipeline;
 use Illuminate\Routing\Attributes\Controllers\Authorize;
@@ -17,12 +18,14 @@ use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\Test;
+use RuntimeException;
 use Skir\Runtime\Field;
 use Skir\Runtime\MethodDescriptor;
 use Skir\Runtime\Type;
 use Skir\Server\Attributes\SkirMethod;
 use Skir\Server\Codecs\SkirCodecs;
 use Skir\Server\Contracts\SkirMethodReference;
+use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
 use Skir\Server\RegisteredProcedure;
@@ -46,6 +49,7 @@ final class LaravelControllerDispatchTest extends TestCase
         NativeDispatchController::$contextObjectId = null;
         MiddlewareStateSkirRequest::reset();
         ResponsePostProcessingMiddleware::$receivedSymfonyResponse = false;
+        RoutingPipelineController::$invocations = 0;
 
         app('router')->aliasMiddleware('test-auth', TestAuthenticationMiddleware::class);
     }
@@ -222,6 +226,165 @@ final class LaravelControllerDispatchTest extends TestCase
     }
 
     #[Test]
+    public function string_short_circuit_middleware_is_normalized_to_an_http_response(): void
+    {
+        $this->registerController('/string-short-circuit', RoutingPipelineController::class);
+
+        $this
+            ->postJson('/string-short-circuit', [
+                'method' => 'StringShortCircuit',
+                'request' => ['name' => 'unused'],
+            ])
+            ->assertOk()
+            ->assertHeader('content-type', 'text/html; charset=UTF-8')
+            ->assertContent('short-circuited');
+
+        $this->assertSame(0, RoutingPipelineController::$invocations);
+        $this->assertSame(0, NativePayload::$hydrations);
+    }
+
+    #[Test]
+    public function responsable_short_circuit_middleware_is_normalized_to_an_http_response(): void
+    {
+        $this->registerController('/responsable-short-circuit', RoutingPipelineController::class);
+
+        $this
+            ->postJson('/responsable-short-circuit', [
+                'method' => 'ResponsableShortCircuit',
+                'request' => ['name' => 'unused'],
+            ])
+            ->assertStatus(Response::HTTP_ACCEPTED)
+            ->assertHeader('X-Skir-Responsable', 'applied')
+            ->assertExactJson(['result' => 'short-circuited']);
+
+        $this->assertSame(0, RoutingPipelineController::$invocations);
+        $this->assertSame(0, NativePayload::$hydrations);
+    }
+
+    #[Test]
+    public function post_processing_middleware_wraps_dependency_validation_errors(): void
+    {
+        $this->registerController('/pipeline-validation', RoutingPipelineController::class);
+
+        $this
+            ->postJson('/pipeline-validation', [
+                'method' => 'ValidationFailure',
+                'request' => ['name' => ''],
+            ])
+            ->assertUnprocessable()
+            ->assertHeader('X-Skir-Middleware', 'applied')
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_validation_failed',
+                    'message' => 'The given data was invalid.',
+                    'details' => [
+                        'name' => ['The name field is required.'],
+                    ],
+                ],
+            ]);
+
+        $this->assertSame(0, RoutingPipelineController::$invocations);
+    }
+
+    #[Test]
+    public function post_processing_middleware_wraps_dependency_authorization_errors(): void
+    {
+        $this->registerController('/pipeline-authorization', RoutingPipelineController::class);
+
+        $this
+            ->postJson('/pipeline-authorization', [
+                'method' => 'AuthorizationFailure',
+                'request' => ['name' => 'Maxim'],
+            ])
+            ->assertForbidden()
+            ->assertHeader('X-Skir-Middleware', 'applied')
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_authorization_failed',
+                    'message' => 'This action is unauthorized.',
+                ],
+            ]);
+
+        $this->assertSame(0, RoutingPipelineController::$invocations);
+    }
+
+    #[Test]
+    public function package_exceptions_keep_their_skir_envelope_inside_the_middleware_pipeline(): void
+    {
+        $this->registerController('/pipeline-package-error', RoutingPipelineController::class);
+
+        $this
+            ->postJson('/pipeline-package-error', [
+                'method' => 'PackageFailure',
+                'request' => null,
+            ])
+            ->assertUnprocessable()
+            ->assertHeader('X-Skir-Middleware', 'applied')
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_invalid_request',
+                    'message' => 'Invalid request inside the procedure pipeline.',
+                ],
+            ]);
+    }
+
+    #[Test]
+    public function codec_runtime_exceptions_keep_their_skir_envelope_inside_the_middleware_pipeline(): void
+    {
+        Route::skirRpc('/pipeline-codec-error', [
+            Skir::controller(RoutingPipelineController::class),
+        ]);
+
+        $this
+            ->postJson('/pipeline-codec-error', [
+                'method' => 'RuntimeCodecFailure',
+                'request' => null,
+            ])
+            ->assertUnprocessable()
+            ->assertHeader('X-Skir-Middleware', 'applied')
+            ->assertExactJson([
+                'error' => [
+                    'code' => 'skir_invalid_request',
+                    'message' => 'Skir array values must be PHP arrays.',
+                ],
+            ]);
+    }
+
+    #[Test]
+    public function unexpected_controller_exceptions_use_laravels_error_response_inside_the_middleware_pipeline(): void
+    {
+        config(['app.debug' => false]);
+        $this->registerController('/pipeline-unexpected-error', RoutingPipelineController::class);
+
+        $this
+            ->postJson('/pipeline-unexpected-error', [
+                'method' => 'UnexpectedFailure',
+                'request' => null,
+            ])
+            ->assertInternalServerError()
+            ->assertHeader('X-Skir-Middleware', 'applied')
+            ->assertExactJson(['message' => 'Server Error']);
+    }
+
+    #[Test]
+    public function without_middleware_skips_controller_middleware_attributes(): void
+    {
+        $this->withoutMiddleware();
+        $this->registerController('/middleware-disabled', MethodMiddlewareController::class);
+
+        $this
+            ->postJson('/middleware-disabled', [
+                'method' => 'PostProcess',
+                'request' => null,
+            ])
+            ->assertOk()
+            ->assertHeaderMissing('X-Skir-Middleware')
+            ->assertContent('"encoded-first"');
+
+        $this->assertFalse(ResponsePostProcessingMiddleware::$receivedSymfonyResponse);
+    }
+
+    #[Test]
     public function native_authorize_attributes_use_the_laravel_gate(): void
     {
         Gate::define(
@@ -340,6 +503,13 @@ enum NativeDispatchMethod implements SkirMethodReference
     case GetMe;
     case PostProcess;
     case ViewAccount;
+    case StringShortCircuit;
+    case ResponsableShortCircuit;
+    case ValidationFailure;
+    case AuthorizationFailure;
+    case PackageFailure;
+    case UnexpectedFailure;
+    case RuntimeCodecFailure;
 
     public function descriptor(): MethodDescriptor
     {
@@ -403,6 +573,48 @@ enum NativeDispatchMethod implements SkirMethodReference
                 6010,
                 Type::optional(Type::struct([])),
                 Type::string(),
+            ),
+            self::StringShortCircuit => new MethodDescriptor(
+                'StringShortCircuit',
+                6011,
+                Type::struct([Field::value('name', 0, Type::string())]),
+                Type::string(),
+            ),
+            self::ResponsableShortCircuit => new MethodDescriptor(
+                'ResponsableShortCircuit',
+                6012,
+                Type::struct([Field::value('name', 0, Type::string())]),
+                Type::string(),
+            ),
+            self::ValidationFailure => new MethodDescriptor(
+                'ValidationFailure',
+                6013,
+                Type::struct([Field::value('name', 0, Type::string())]),
+                Type::string(),
+            ),
+            self::AuthorizationFailure => new MethodDescriptor(
+                'AuthorizationFailure',
+                6014,
+                Type::struct([Field::value('name', 0, Type::string())]),
+                Type::string(),
+            ),
+            self::PackageFailure => new MethodDescriptor(
+                'PackageFailure',
+                6015,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::UnexpectedFailure => new MethodDescriptor(
+                'UnexpectedFailure',
+                6016,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::RuntimeCodecFailure => new MethodDescriptor(
+                'RuntimeCodecFailure',
+                6017,
+                Type::optional(Type::struct([])),
+                Type::array(Type::string()),
             ),
         };
     }
@@ -523,6 +735,68 @@ final class MethodMiddlewareController
     }
 }
 
+final class RoutingPipelineController
+{
+    public static int $invocations = 0;
+
+    #[SkirMethod(NativeDispatchMethod::StringShortCircuit)]
+    #[ControllerMiddlewareAttribute(StringShortCircuitMiddleware::class)]
+    public function stringShortCircuit(NativePayload $request): string
+    {
+        self::$invocations++;
+
+        return $request->name;
+    }
+
+    #[SkirMethod(NativeDispatchMethod::ResponsableShortCircuit)]
+    #[ControllerMiddlewareAttribute(ResponsableShortCircuitMiddleware::class)]
+    public function responsableShortCircuit(NativePayload $request): string
+    {
+        self::$invocations++;
+
+        return $request->name;
+    }
+
+    #[SkirMethod(NativeDispatchMethod::ValidationFailure)]
+    #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
+    public function validationFailure(PipelineValidationSkirRequest $request): string
+    {
+        self::$invocations++;
+
+        return $request->skir()->name;
+    }
+
+    #[SkirMethod(NativeDispatchMethod::AuthorizationFailure)]
+    #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
+    public function authorizationFailure(PipelineAuthorizationSkirRequest $request): string
+    {
+        self::$invocations++;
+
+        return $request->skir()->name;
+    }
+
+    #[SkirMethod(NativeDispatchMethod::PackageFailure)]
+    #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
+    public function packageFailure(): never
+    {
+        throw SkirServerException::invalidRequest('Invalid request inside the procedure pipeline.');
+    }
+
+    #[SkirMethod(NativeDispatchMethod::UnexpectedFailure)]
+    #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
+    public function unexpectedFailure(): never
+    {
+        throw new RuntimeException('Unexpected procedure failure.');
+    }
+
+    #[SkirMethod(NativeDispatchMethod::RuntimeCodecFailure)]
+    #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
+    public function runtimeCodecFailure(): string
+    {
+        return 'not-an-array';
+    }
+}
+
 final class MiddlewareStateSkirRequest extends SkirFormRequest
 {
     /** @var array{userId?: mixed, tenant?: mixed} */
@@ -561,6 +835,50 @@ final class MiddlewareStateSkirRequest extends SkirFormRequest
         self::$authorizationContext = [];
         self::$authorizations = 0;
         self::$ruleResolutions = 0;
+    }
+
+    /** @return class-string<NativePayload> */
+    protected function skirClass(): string
+    {
+        return NativePayload::class;
+    }
+}
+
+final class PipelineValidationSkirRequest extends SkirFormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /** @return array<string, array<int, string>> */
+    public function rules(): array
+    {
+        return [
+            'name' => ['required', 'string'],
+        ];
+    }
+
+    /** @return class-string<NativePayload> */
+    protected function skirClass(): string
+    {
+        return NativePayload::class;
+    }
+}
+
+final class PipelineAuthorizationSkirRequest extends SkirFormRequest
+{
+    public function authorize(): bool
+    {
+        return false;
+    }
+
+    /** @return array<string, array<int, string>> */
+    public function rules(): array
+    {
+        return [
+            'name' => ['required', 'string'],
+        ];
     }
 
     /** @return class-string<NativePayload> */
@@ -663,6 +981,32 @@ final class ShortCircuitMiddleware
     }
 }
 
+final class StringShortCircuitMiddleware
+{
+    public function handle(Request $request, Closure $next): string
+    {
+        return 'short-circuited';
+    }
+}
+
+final class ResponsableShortCircuitMiddleware
+{
+    public function handle(Request $request, Closure $next): Responsable
+    {
+        return new PipelineShortCircuitResponsable;
+    }
+}
+
+final class PipelineShortCircuitResponsable implements Responsable
+{
+    public function toResponse($request): Response
+    {
+        return response()
+            ->json(['result' => 'short-circuited'], Response::HTTP_ACCEPTED)
+            ->header('X-Skir-Responsable', 'applied');
+    }
+}
+
 final class TestAuthenticationMiddleware
 {
     public function handle(Request $request, Closure $next): Response
@@ -685,7 +1029,7 @@ final class ResponsePostProcessingMiddleware
         self::$receivedSymfonyResponse = $response instanceof Response;
 
         if (! $response instanceof Response) {
-            throw new \RuntimeException('Procedure middleware must receive an encoded Symfony response.');
+            throw new RuntimeException('Procedure middleware must receive an encoded Symfony response.');
         }
 
         $response->headers->set('X-Skir-Middleware', 'applied');

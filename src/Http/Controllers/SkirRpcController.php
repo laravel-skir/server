@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace Skir\Server\Http\Controllers;
 
+use Closure;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\Request;
-use Illuminate\Pipeline\Pipeline;
+use Illuminate\Routing\Pipeline;
+use Illuminate\Routing\Router;
 use JsonException;
 use Skir\Runtime\Exceptions\SkirRuntimeException;
 use Skir\Server\Codecs\SkirCodec;
 use Skir\Server\Codecs\SkirHttpCodec;
 use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\Http\Requests\SkirMethodRequestScope;
+use Skir\Server\PreparedProcedure;
 use Skir\Server\RegisteredProcedure;
 use Skir\Server\RequestContext;
 use Skir\Server\SkirServer;
@@ -26,6 +29,7 @@ final readonly class SkirRpcController
         private StudioRenderer $studioRenderer,
         private Container $container,
         private SkirMethodRequestScope $requestScope,
+        private Router $router,
     ) {}
 
     public function __invoke(Request $request): Response
@@ -58,20 +62,34 @@ final readonly class SkirRpcController
                     $context = new RequestContext($methodRequest, $procedure->descriptor);
                     $prepared = $procedure->prepare($decodedPayload, $context);
 
-                    return (new Pipeline($this->container))
+                    $response = (new Pipeline($this->container))
                         ->send($methodRequest)
-                        ->through($prepared->middleware)
-                        ->then(fn (): Response => $this->encodeResponse(
+                        ->through($this->procedureMiddleware($prepared))
+                        ->then(fn (): Response => $this->invokeAndEncodeResponse(
                             $codec,
                             $procedure,
-                            $prepared->invoke(),
+                            $prepared,
                         ));
+
+                    return $this->router->prepareResponse($methodRequest, $response);
                 },
             );
         } catch (SkirServerException $exception) {
             return $exception->toResponse();
         } catch (SkirRuntimeException $exception) {
             return SkirServerException::invalidRequest($exception->getMessage())->toResponse();
+        }
+    }
+
+    private function invokeAndEncodeResponse(
+        SkirCodec $codec,
+        RegisteredProcedure $procedure,
+        PreparedProcedure $prepared,
+    ): Response {
+        try {
+            return $this->encodeResponse($codec, $procedure, $prepared->invoke());
+        } catch (SkirRuntimeException $exception) {
+            throw SkirServerException::invalidRequest($exception->getMessage());
         }
     }
 
@@ -90,6 +108,18 @@ final readonly class SkirRpcController
         return response()->json($encodedResponse, Response::HTTP_OK);
     }
 
+    /** @return list<Closure|string> */
+    private function procedureMiddleware(PreparedProcedure $prepared): array
+    {
+        if ($this->container->bound('middleware.disable')) {
+            if ($this->container->make('middleware.disable') === true) {
+                return [];
+            }
+        }
+
+        return $prepared->middleware;
+    }
+
     private function serverFromRequest(Request $request): SkirServer
     {
         $server = $request->route()?->defaults['skirServer'] ?? null;
@@ -103,7 +133,7 @@ final readonly class SkirRpcController
 
     private function isStudioRequest(Request $request): bool
     {
-        if (! $request->isMethod('GET')) {
+        if (! $this->usesQueryString($request)) {
             return false;
         }
 
@@ -125,7 +155,7 @@ final readonly class SkirRpcController
      */
     private function payloadFromRequest(Request $request, SkirCodec $codec): array
     {
-        if ($request->isMethod('GET')) {
+        if ($this->usesQueryString($request)) {
             return $this->payloadFromQueryString($request);
         }
 
@@ -169,6 +199,15 @@ final readonly class SkirRpcController
         }
 
         return $payload;
+    }
+
+    private function usesQueryString(Request $request): bool
+    {
+        if ($request->isMethod('GET')) {
+            return true;
+        }
+
+        return $request->isMethod('HEAD');
     }
 
     /**

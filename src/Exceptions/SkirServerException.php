@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Skir\Server\Exceptions;
 
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use RuntimeException;
 
 final class SkirServerException extends RuntimeException
@@ -98,5 +99,10 @@ final class SkirServerException extends RuntimeException
         return response()->json([
             'error' => $error,
         ], $this->status);
+    }
+
+    public function render(Request $request): JsonResponse
+    {
+        return $this->toResponse();
     }
 }

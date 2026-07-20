@@ -86,6 +86,25 @@ final class SkirRpcControllerTest extends TestCase
     }
 
     #[Test]
+    public function it_dispatches_a_head_request_from_the_query_string(): void
+    {
+        app(SkirServer::class)->addMethod(
+            new MethodDescriptor('Square', 1001, Type::float32(), Type::float32()),
+            fn (float $value): float => $value * $value,
+        );
+
+        $this
+            ->call(
+                'HEAD',
+                '/skir?method=Square&request=5.0',
+                server: ['HTTP_ACCEPT' => 'application/json'],
+            )
+            ->assertOk()
+            ->assertHeader('content-type', 'application/json')
+            ->assertContent('');
+    }
+
+    #[Test]
     public function it_registers_a_route_macro_for_skir_rpc_endpoints(): void
     {
         $route = Route::skirRpc('/rpc');

@@ -29,6 +29,18 @@ final class StudioRendererTest extends TestCase
     }
 
     #[Test]
+    public function head_requests_can_open_studio_with_a_suppressed_body(): void
+    {
+        Route::skirRpc('/head-studio')->studio();
+
+        $this
+            ->call('HEAD', '/head-studio?studio')
+            ->assertOk()
+            ->assertHeader('content-type', 'text/html; charset=UTF-8')
+            ->assertContent('');
+    }
+
+    #[Test]
     public function it_serializes_nested_type_metadata(): void
     {
         $server = new SkirServer(new ProcedureRegistry);
