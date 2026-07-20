@@ -27,15 +27,10 @@ final readonly class SkirMethodRequestScope
         $methodRequest->files->replace([]);
         $methodRequest->setJson(new InputBag);
 
-        $decodedInput = new InputBag(is_array($payload) ? $payload : []);
-
-        if ($methodRequest->isJson()) {
-            $methodRequest->setJson($decodedInput);
-        }
-
-        if (! $methodRequest->isJson()) {
-            $methodRequest->request = $decodedInput;
-        }
+        $this->bindDecodedInput(
+            $methodRequest,
+            new InputBag(is_array($payload) ? $payload : []),
+        );
 
         $this->bindRequest($methodRequest, $methodUserResolver);
 
@@ -44,6 +39,29 @@ final readonly class SkirMethodRequestScope
         } finally {
             $this->bindRequest($originalRequest, $originalUserResolver);
         }
+    }
+
+    private function bindDecodedInput(Request $request, InputBag $decodedInput): void
+    {
+        if ($request->isJson()) {
+            $request->setJson($decodedInput);
+
+            return;
+        }
+
+        if ($request->isMethod('GET')) {
+            $request->query = $decodedInput;
+
+            return;
+        }
+
+        if ($request->isMethod('HEAD')) {
+            $request->query = $decodedInput;
+
+            return;
+        }
+
+        $request->request = $decodedInput;
     }
 
     private function bindRequest(Request $request, Closure $userResolver): void

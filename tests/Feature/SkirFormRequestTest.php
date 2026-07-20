@@ -435,6 +435,42 @@ final class SkirFormRequestTest extends TestCase
             ]);
     }
 
+    #[Test]
+    public function get_requests_scope_form_requests_to_the_decoded_object_payload(): void
+    {
+        RenameUserFormController::$invocations = 0;
+        RenameUserFormController::$requestPayload = [];
+        Route::skirRpc('/get-form-request', [
+            Skir::method(FormRequestSkirMethod::RenameUser, RenameUserFormController::class),
+        ], SkirCodecs::standardJson());
+        $query = http_build_query([
+            'method' => 'RenameUser',
+            'request' => json_encode([
+                'id' => 42,
+                'name' => '  Maxim  ',
+                'metadata' => 'decoded',
+            ], JSON_THROW_ON_ERROR),
+            'transportOnly' => 'must-not-leak',
+        ]);
+
+        $this
+            ->withHeader('Accept', 'application/json')
+            ->get("/get-form-request?{$query}")
+            ->assertOk()
+            ->assertExactJson([
+                'id' => 42,
+                'name' => 'Maxim',
+                'metadata' => 'decoded',
+            ]);
+
+        $this->assertSame(1, RenameUserFormController::$invocations);
+        $this->assertSame([
+            'id' => 42,
+            'name' => 'Maxim',
+            'metadata' => 'decoded',
+        ], RenameUserFormController::$requestPayload);
+    }
+
     /** @param class-string $controller */
     private function postDecodedFormRequest(string $controller, array $decodedPayload): TestResponse
     {
