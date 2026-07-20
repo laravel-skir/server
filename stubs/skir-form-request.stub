@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use {{ requestClass }};
+use Illuminate\Contracts\Validation\ValidationRule;
+use Skir\Server\Http\Requests\SkirFormRequest;
+
+/** @extends SkirFormRequest<{{ requestClassName }}> */
+final class {{ className }} extends SkirFormRequest
+{
+    public function authorize(): bool
+    {
+        return false;
+    }
+
+    /** @return array<string, ValidationRule|array<mixed>|string> */
+    public function rules(): array
+    {
+        return [];
+    }
+
+    /** @return class-string<{{ requestClassName }}> */
+    protected function skirClass(): string
+    {
+        return {{ requestClassName }}::class;
+    }
+}

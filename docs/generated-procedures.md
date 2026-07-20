@@ -1,13 +1,21 @@
 # Generated procedures
 
-The server package consumes method descriptors and PHP types emitted from a Skir schema. Two generators are supported:
+The server package consumes method descriptors and PHP types emitted from a Skir schema. Three generators are supported:
 
+- [`skir-simple-data-objects-generator`](https://github.com/php-skir/skir-simple-data-objects-generator) generates immutable `std-out/simple-data-objects` DTOs and applies their generated validation during request hydration.
 - [`skir-laravel-data-generator`](https://github.com/php-skir/skir-laravel-data-generator) generates Spatie Laravel Data objects and applies Laravel Data validation during request hydration.
 - [`skir-php-generator`](https://github.com/php-skir/skir-php-generator) generates framework-independent, readonly PHP data objects.
 
-Both generators emit the method descriptors, method references, and provider contracts used by `php-skir/server`.
+All three generators emit the method descriptors, method references, and provider contracts used by `php-skir/server`.
 
 ## Install a generator
+
+For Simple Data Objects:
+
+```bash
+composer require php-skir/server std-out/simple-data-objects
+npm install --save-dev skir skir-simple-data-objects-generator
+```
 
 For Laravel Data objects:
 
@@ -25,13 +33,24 @@ npm install --save-dev skir skir-php-generator
 
 ## Configure a generator
 
+For Simple Data Objects:
+
+```yaml
+# skir.yml
+generators:
+  - mod: skir-simple-data-objects-generator
+    outDir: app/Skir/skirout
+    config:
+      namespace: Skir
+```
+
 For Laravel Data objects:
 
 ```yaml
 # skir.yml
 generators:
   - mod: skir-laravel-data-generator
-    outDir: skir/skirout
+    outDir: app/Skir/skirout
     config:
       namespace: Skir
 ```
@@ -42,7 +61,7 @@ For standard PHP objects:
 # skir.yml
 generators:
   - mod: skir-php-generator
-    outDir: skir/skirout
+    outDir: app/Skir/skirout
     config:
       namespace: Skir
 ```
@@ -54,22 +73,74 @@ Skir requires every configured `outDir` to end in `/skirout`. The suffix marks a
 Source directories below `skir-src` become PHP subnamespaces and output directories. The `.skir` filename does not add a namespace segment:
 
 ```text
-skir-src/admin/users.skir -> skir/skirout/Admin/GetUserRequestData.php
+skir-src/admin/users.skir -> app/Skir/skirout/Admin/GetUserRequestData.php
                           -> Skir\Admin\GetUserRequestData
 ```
 
-The standard PHP generator emits `GetUserRequest` rather than `GetUserRequestData` for the same schema.
+Simple Data Objects and Laravel Data use the `Data` suffix shown above. The standard PHP generator emits `GetUserRequest` for the same schema.
+
+## Request hydration and validation
+
+Controller methods can receive the generated DTO directly or receive a Laravel Form Request. The server selects the generated factory in this order:
+
+1. `makeFromSkirPayload()` for Simple Data Objects and Laravel Data;
+2. `fromArray()` for standard PHP objects;
+3. `fromSkirValue()` for another compatible application type.
+
+Simple Data Objects and Laravel Data therefore run their generated validation when a decoded object payload is injected directly. Standard PHP objects are hydrated through `fromArray()` and do not add semantic Laravel validation. Use a Form Request when a standard PHP payload needs application validation.
+
+For typed validation, extend `SkirFormRequest` and identify the generated request class:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Requests\Skir\Account;
+
+use Illuminate\Contracts\Validation\ValidationRule;
+use Skir\Account\UpdateMeRequestData;
+use Skir\Server\Http\Requests\SkirFormRequest;
+
+/** @extends SkirFormRequest<UpdateMeRequestData> */
+final class UpdateMeFormRequest extends SkirFormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /** @return array<string, ValidationRule|array<mixed>|string> */
+    public function rules(): array
+    {
+        return [
+            'email' => ['required', 'email'],
+            'name' => ['required', 'string', 'max:100'],
+        ];
+    }
+
+    /** @return class-string<UpdateMeRequestData> */
+    protected function skirClass(): string
+    {
+        return UpdateMeRequestData::class;
+    }
+}
+```
+
+Laravel completes input preparation, authorization, and validation before the controller runs. Calling `$request->skir()` then hydrates the complete prepared `$request->all()` bag—not only `$request->validated()`—through the appropriate factory: `makeFromSkirPayload()` for Simple Data Objects and Laravel Data, or `fromArray()` for standard PHP. This retains decoded schema fields when semantic Form Request rules intentionally cover only a subset. Ordinary Laravel Form Requests are also supported when typed DTO access is unnecessary.
+
+See [Scaffolding](scaffolding.md) to generate this class and [Routing](routing.md#form-requests-and-decoded-input) for the request lifecycle.
 
 ## Generated server files
 
 For a module containing methods, the generator emits procedure-related files such as:
 
 ```text
-skir/skirout/Admin/SkirMethods.php
-skir/skirout/Admin/AdminSkirMethod.php
-skir/skirout/Admin/AbstractSkirProcedures.php
-skir/skirout/Admin/SkirProcedures.php
-skir/skirout/Admin/SkirProcedureProvider.php
+app/Skir/skirout/Admin/SkirMethods.php
+app/Skir/skirout/Admin/AdminSkirMethod.php
+app/Skir/skirout/Admin/AbstractSkirProcedures.php
+app/Skir/skirout/Admin/SkirProcedures.php
+app/Skir/skirout/Admin/SkirProcedureProvider.php
 ```
 
 - `SkirMethods` exposes the runtime `MethodDescriptor` for each schema method.
@@ -83,6 +154,14 @@ The generators also emit the request and response types referenced by these cont
 ## Configure Composer automatically
 
 Run Skir before configuring Composer because the configurator verifies that the output directory exists.
+
+With the Simple Data Objects generator:
+
+```bash
+npx skir gen
+npx skir-simple-data-objects-generator configure-composer
+composer dump-autoload
+```
 
 With the Laravel Data generator:
 
@@ -106,7 +185,7 @@ The generator's `configure-composer` command reads `skir.yml` and `composer.json
 {
   "autoload": {
     "psr-4": {
-      "Skir\\": "skir/skirout/"
+      "Skir\\": "app/Skir/skirout/"
     }
   }
 }
@@ -135,7 +214,7 @@ npm run skir:generate
 composer dump-autoload
 ```
 
-Replace the configurator command with `skir-php-generator configure-composer` when using the standard PHP generator.
+Replace the configurator command with `skir-simple-data-objects-generator configure-composer` or `skir-php-generator configure-composer` for the selected generator.
 
 ## Manual Composer mapping
 
@@ -145,7 +224,7 @@ If Composer configuration is managed manually, map the root namespace to the sam
 {
   "autoload": {
     "psr-4": {
-      "Skir\\": "skir/skirout/"
+      "Skir\\": "app/Skir/skirout/"
     }
   }
 }
@@ -156,13 +235,3 @@ Then refresh the autoloader:
 ```bash
 composer dump-autoload
 ```
-
-## Optional Artisan wrapper
-
-The [`php-skir/client`](https://github.com/php-skir/client) package provides an optional Artisan wrapper for running the configured Skir generators:
-
-```bash
-php artisan skir:generate-client
-```
-
-The client package is not required to host a SkirRPC server. It will usually be installed in a separate application that consumes the server, so server projects can use `npx skir gen` directly.

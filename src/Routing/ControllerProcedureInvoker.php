@@ -4,12 +4,33 @@ declare(strict_types=1);
 
 namespace Skir\Server\Routing;
 
+use Closure;
+use Illuminate\Container\Util;
+use Illuminate\Contracts\Container\Container;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Routing\Route;
+use Illuminate\Routing\Router;
+use InvalidArgumentException;
+use ReflectionClass;
+use ReflectionIntersectionType;
 use ReflectionMethod;
 use ReflectionNamedType;
+use ReflectionParameter;
+use ReflectionType;
+use ReflectionUnionType;
+use Skir\Server\Contracts\PreparesProcedure;
+use Skir\Server\Exceptions\AmbiguousControllerRequestException;
+use Skir\Server\Exceptions\UnsupportedControllerParameterException;
+use Skir\Server\Exceptions\UnsupportedTerminableMiddlewareException;
+use Skir\Server\Http\Requests\SkirFormRequest;
+use Skir\Server\Http\Requests\SkirFormRequestResolver;
+use Skir\Server\Hydration\SkirPayloadHydrator;
+use Skir\Server\PreparedProcedure;
 use Skir\Server\RequestContext;
 use Skir\Server\SkirContext;
 
-final readonly class ControllerProcedureInvoker
+/** @internal */
+final readonly class ControllerProcedureInvoker implements PreparesProcedure
 {
     /**
      * @param  class-string  $controller
@@ -17,55 +38,324 @@ final readonly class ControllerProcedureInvoker
     public function __construct(
         private string $controller,
         private string $method,
+        private SkirPayloadHydrator $payloadHydrator,
+        private SkirFormRequestResolver $formRequestResolver,
+        private Router $router,
+        private SkirControllerDispatcher $dispatcher,
+        private Container $container,
     ) {}
 
     public function __invoke(mixed $request, SkirContext $context): mixed
     {
-        $controller = app($this->controller);
-        $reflection = new ReflectionMethod($controller, $this->method);
-        $arguments = [];
-
-        foreach ($reflection->getParameters() as $parameter) {
-            $type = $parameter->getType();
-            $typeName = $type instanceof ReflectionNamedType ? $type->getName() : null;
-
-            if ($typeName === SkirContext::class) {
-                $arguments[] = $context;
-
-                continue;
-            }
-
-            if ($typeName === RequestContext::class) {
-                $arguments[] = $context;
-
-                continue;
-            }
-
-            $arguments[] = $this->hydrateRequest($typeName, $request);
-        }
-
-        return $this->normalizeResponse($reflection->invokeArgs($controller, $arguments));
+        return $this->prepare($request, $context)->invoke();
     }
 
-    private function hydrateRequest(?string $typeName, mixed $request): mixed
+    public function prepare(mixed $request, SkirContext $context): PreparedProcedure
+    {
+        $route = $this->controllerRoute($context);
+        $controller = $route->getController();
+
+        $middleware = $this->router->resolveMiddleware(
+            $route->controllerMiddleware(),
+            $route->excludedControllerMiddleware(),
+        );
+        $this->rejectTerminableMiddleware($middleware);
+
+        return new PreparedProcedure(
+            $middleware,
+            fn (): mixed => $this->invokePrepared($route, $controller, $request, $context),
+        );
+    }
+
+    private function invokePrepared(
+        Route $route,
+        object $controller,
+        mixed $request,
+        SkirContext $context,
+    ): mixed {
+        $preparedParameters = $this->prepareParameters($controller, $request, $context);
+        $action = $route->getAction();
+        $action['skirParameters'] = $preparedParameters;
+        $route->setAction($action);
+
+        return $this->normalizeResponse(
+            $this->dispatcher->dispatch($route, $controller, $this->method),
+        );
+    }
+
+    private function controllerRoute(SkirContext $context): Route
+    {
+        $outerRoute = $context->request->route();
+
+        if (! $outerRoute instanceof Route) {
+            throw new InvalidArgumentException('Skir controller procedures require a bound Laravel route.');
+        }
+
+        $route = clone $outerRoute;
+        $action = "{$this->controller}@{$this->method}";
+        $route->setAction([
+            'uses' => $action,
+            'controller' => $action,
+        ]);
+        $route->flushController();
+
+        return $route;
+    }
+
+    private function prepareParameters(
+        object $controller,
+        mixed $request,
+        SkirContext $context,
+    ): PreparedControllerParameters {
+        $reflection = new ReflectionMethod($controller, $this->method);
+        $values = [];
+        $nullParameterIndexes = [];
+        $outerRoute = $context->request->route();
+        $directRequestParameters = array_values(array_filter(
+            $reflection->getParameters(),
+            fn (ReflectionParameter $parameter): bool => $this->isDirectRequestParameter($parameter, $outerRoute),
+        ));
+
+        if (count($directRequestParameters) > 1) {
+            throw AmbiguousControllerRequestException::forController(
+                $this->controller,
+                $this->method,
+                array_map(
+                    static fn (ReflectionParameter $parameter): string => $parameter->getName(),
+                    $directRequestParameters,
+                ),
+            );
+        }
+
+        foreach ($reflection->getParameters() as $parameterIndex => $parameter) {
+            if (Util::getContextualAttributeFromDependency($parameter) !== null) {
+                continue;
+            }
+
+            $type = $parameter->getType();
+            $typeName = $type instanceof ReflectionNamedType ? $type->getName() : null;
+            $isBuiltin = $type instanceof ReflectionNamedType && $type->isBuiltin();
+
+            if ($typeName === SkirContext::class || $typeName === RequestContext::class) {
+                $values[] = $context;
+
+                continue;
+            }
+
+            if ($outerRoute instanceof Route && $outerRoute->hasParameter($parameter->getName())) {
+                $values[] = $outerRoute->parameter($parameter->getName());
+
+                continue;
+            }
+
+            if ($type instanceof ReflectionUnionType || $type instanceof ReflectionIntersectionType) {
+                $this->assertSupportedCompoundType($parameter, $type);
+                $values[] = $request;
+
+                continue;
+            }
+
+            if ($this->isFormRequest($typeName)) {
+                if ($request === null && $type?->allowsNull()) {
+                    /** @var class-string<SkirFormRequest> $typeName */
+                    $marker = $this->formRequestResolver->authorizeNull($typeName, $context);
+                    $values[] = $marker;
+                    $nullParameterIndexes[] = $parameterIndex;
+
+                    continue;
+                }
+
+                if (! is_array($request)) {
+                    throw new InvalidArgumentException('Skir Form Requests require a decoded array/object payload.');
+                }
+
+                continue;
+            }
+
+            if ($this->isLaravelFormRequest($typeName)) {
+                if ($request === null && $type?->allowsNull()) {
+                    throw new InvalidArgumentException(
+                        'Nullable Skir controller Form Requests must extend ['.SkirFormRequest::class.'].',
+                    );
+                }
+
+                if (! is_array($request)) {
+                    throw new InvalidArgumentException('Laravel Form Requests require a decoded array/object payload.');
+                }
+
+                continue;
+            }
+
+            if ($request === null && $type?->allowsNull()) {
+                $marker = $this->nullablePayloadMarker($typeName);
+
+                if ($marker !== null) {
+                    $values[] = $marker;
+                    $nullParameterIndexes[] = $parameterIndex;
+
+                    continue;
+                }
+
+                if ($typeName === null || $isBuiltin) {
+                    $values[] = null;
+                }
+
+                continue;
+            }
+
+            if ($typeName !== null && $this->payloadHydrator->supports($typeName)) {
+                /** @var class-string $typeName */
+                $values[] = $this->payloadHydrator->hydrate($typeName, $request);
+
+                continue;
+            }
+
+            if ($typeName === null || $isBuiltin) {
+                $values[] = $request;
+            }
+        }
+
+        return new PreparedControllerParameters($values, $nullParameterIndexes);
+    }
+
+    private function isDirectRequestParameter(
+        ReflectionParameter $parameter,
+        mixed $outerRoute,
+    ): bool {
+        if (Util::getContextualAttributeFromDependency($parameter) !== null) {
+            return false;
+        }
+
+        $type = $parameter->getType();
+        $typeName = $type instanceof ReflectionNamedType ? $type->getName() : null;
+
+        if ($typeName === SkirContext::class || $typeName === RequestContext::class) {
+            return false;
+        }
+
+        if ($outerRoute instanceof Route && $outerRoute->hasParameter($parameter->getName())) {
+            return false;
+        }
+
+        if ($type instanceof ReflectionUnionType || $type instanceof ReflectionIntersectionType) {
+            $this->assertSupportedCompoundType($parameter, $type);
+
+            return true;
+        }
+
+        if ($this->isFormRequest($typeName) || $this->isLaravelFormRequest($typeName)) {
+            return true;
+        }
+
+        if ($typeName === null) {
+            return true;
+        }
+
+        if ($type->isBuiltin()) {
+            return true;
+        }
+
+        return $this->payloadHydrator->supports($typeName);
+    }
+
+    private function assertSupportedCompoundType(
+        ReflectionParameter $parameter,
+        ReflectionType $type,
+    ): void {
+        if ($type instanceof ReflectionUnionType) {
+            $containsOnlyBuiltinTypes = array_all(
+                $type->getTypes(),
+                static fn (ReflectionType $member): bool => $member instanceof ReflectionNamedType
+                    && $member->isBuiltin(),
+            );
+
+            if ($containsOnlyBuiltinTypes) {
+                return;
+            }
+        }
+
+        throw UnsupportedControllerParameterException::compoundType(
+            $this->controller,
+            $this->method,
+            $parameter->getName(),
+            (string) $type,
+        );
+    }
+
+    /** @param list<Closure|string> $middleware */
+    private function rejectTerminableMiddleware(array $middleware): void
+    {
+        foreach ($middleware as $resolvedMiddleware) {
+            if ($resolvedMiddleware instanceof Closure) {
+                continue;
+            }
+
+            [$middlewareClass] = explode(':', $resolvedMiddleware, 2);
+
+            if ($this->container->bound($middlewareClass)) {
+                if (method_exists($this->container->make($middlewareClass), 'terminate')) {
+                    throw UnsupportedTerminableMiddlewareException::forMiddleware($resolvedMiddleware);
+                }
+
+                continue;
+            }
+
+            if (method_exists($middlewareClass, 'terminate')) {
+                throw UnsupportedTerminableMiddlewareException::forMiddleware($resolvedMiddleware);
+            }
+        }
+    }
+
+    private function isFormRequest(?string $typeName): bool
     {
         if ($typeName === null) {
-            return $request;
+            return false;
         }
 
         if (! class_exists($typeName)) {
-            return $request;
+            return false;
         }
 
-        if (method_exists($typeName, 'makeFromSkirPayload')) {
-            return $typeName::makeFromSkirPayload($request);
+        return is_a($typeName, SkirFormRequest::class, true);
+    }
+
+    private function isLaravelFormRequest(?string $typeName): bool
+    {
+        if ($typeName === null) {
+            return false;
         }
 
-        if (method_exists($typeName, 'fromArray')) {
-            return $typeName::fromArray($request);
+        if (! class_exists($typeName)) {
+            return false;
         }
 
-        return $request;
+        return is_a($typeName, FormRequest::class, true);
+    }
+
+    private function nullablePayloadMarker(?string $typeName): ?object
+    {
+        if ($typeName === null) {
+            return null;
+        }
+
+        if (! class_exists($typeName)) {
+            return null;
+        }
+
+        if (! $this->payloadHydrator->supports($typeName)) {
+            return null;
+        }
+
+        $reflection = new ReflectionClass($typeName);
+
+        if ($reflection->isEnum()) {
+            /** @var list<object> $cases */
+            $cases = $typeName::cases();
+
+            return $cases[0] ?? null;
+        }
+
+        return $reflection->newInstanceWithoutConstructor();
     }
 
     private function normalizeResponse(mixed $response): mixed

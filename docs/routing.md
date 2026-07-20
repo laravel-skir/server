@@ -7,12 +7,12 @@ A SkirRPC endpoint is one Laravel route composed from one or more procedure sour
 Register a controller through `Skir::controller()`:
 
 ```php
-use App\Http\Skir\UserController;
+use App\Skir\Admin\AdminController;
 use Illuminate\Support\Facades\Route;
 use Skir\Server\Facades\Skir;
 
 Route::skirRpc('/api/skir', [
-    Skir::controller(UserController::class),
+    Skir::controller(AdminController::class),
 ]);
 ```
 
@@ -23,7 +23,7 @@ Only public, non-static methods carrying a `SkirMethod` attribute are registered
 
 declare(strict_types=1);
 
-namespace App\Http\Skir;
+namespace App\Skir\Admin;
 
 use Skir\Admin\AdminSkirMethod;
 use Skir\Admin\GetUserRequestData;
@@ -31,7 +31,7 @@ use Skir\Admin\UserData;
 use Skir\Server\Attributes\SkirMethod;
 use Skir\Server\SkirContext;
 
-final class UserController
+final class AdminController
 {
     #[SkirMethod(AdminSkirMethod::GetUser)]
     public function get(GetUserRequestData $request, SkirContext $context): UserData
@@ -49,22 +49,108 @@ The generated enum case resolves to the matching `SkirMethods` descriptor. The e
 For every attributed method, the dispatcher:
 
 1. Registers its generated method descriptor with the endpoint.
-2. Resolves the controller through Laravel's container.
-3. Hydrates a generated request object when the parameter type supports it.
-4. Injects `SkirContext` when requested.
-5. Invokes the controller method.
-6. Converts a generated response object back to a Skir payload.
+2. Builds method-specific Laravel route metadata and discovers controller middleware.
+3. Places the decoded Skir payload in a method-scoped Laravel request.
+4. Resolves Form Requests, generated DTOs, route parameters, contextual attributes, `SkirContext`, and other dependencies through Laravel's controller dispatcher.
+5. Invokes the controller through `callAction()` when available.
+6. Converts the result to a Skir payload, encodes the response, and lets controller middleware inspect or replace that encoded response.
 
-The Laravel Data generator hydrates struct requests through `makeFromSkirPayload()`, so Laravel Data validation runs before the controller method. The standard PHP generator hydrates structs through `fromArray()`.
+Simple Data Objects and Laravel Data hydrate through `makeFromSkirPayload()`. Standard PHP objects hydrate through `fromArray()`. See [Generated procedures](generated-procedures.md#request-hydration-and-validation) for their validation differences.
+
+## Controller middleware and authorization
+
+Laravel controller attributes can protect individual Skir procedures on a shared endpoint. In this example `Login` remains public, while `GetMe` passes through Sanctum bearer-token authentication:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Skir\Account;
+
+use App\Actions\AccountActions;
+use App\Http\Requests\Skir\Account\LoginFormRequest;
+use Illuminate\Routing\Attributes\Controllers\Middleware;
+use Skir\Account\AccountSkirMethod;
+use Skir\Account\LoginResponseData;
+use Skir\Account\UserData;
+use Skir\Server\Attributes\SkirMethod;
+use Skir\Server\SkirContext;
+
+final class AccountController
+{
+    #[SkirMethod(AccountSkirMethod::Login)]
+    public function login(LoginFormRequest $request, AccountActions $accounts): LoginResponseData
+    {
+        return $accounts->login($request->skir());
+    }
+
+    #[SkirMethod(AccountSkirMethod::GetMe)]
+    #[Middleware('auth:sanctum')]
+    public function getMe(SkirContext $context, AccountActions $accounts): UserData
+    {
+        return $accounts->getMe($context->request->user());
+    }
+}
+```
+
+`AccountActions` is an application service in this example; its `login()` and `getMe()` methods construct and return the generated response DTOs. The generated response fields are schema-specific.
+
+Registering that controller and enabling Studio still uses one endpoint:
+
+```php
+use App\Skir\Account\AccountController;
+use Illuminate\Support\Facades\Route;
+use Skir\Server\Facades\Skir;
+
+Route::skirRpc('/api/skir', [
+    Skir::controller(AccountController::class),
+])->studio();
+```
+
+The package uses Laravel's controller middleware discovery, filtering, alias resolution, and pipeline. The supported controller APIs include:
+
+- `#[Middleware(...)]` and `#[Authorize(...)]` from `Illuminate\Routing\Attributes\Controllers`, at class or method level;
+- the `Illuminate\Routing\Controllers\HasMiddleware` interface, including `only` and `except` filters;
+- middleware registered through Laravel's base `Controller::middleware()` API.
+
+`#[Authorize]` uses Laravel's normal gate middleware, so its ability and model arguments follow Laravel's controller-attribute conventions. Middleware can read the authenticated user and route state, short-circuit the procedure, and inspect or replace the final encoded Symfony response.
+
+Controller middleware belongs to controller-backed procedures. Generated procedure providers and manually registered handlers do not discover or run controller middleware. Put middleware on the outer `Route::skirRpc()` route when it must cover every routing style or the entire endpoint.
+
+### Studio and method middleware
+
+Studio remains endpoint-visible when it is enabled: a GET request such as `/api/skir?studio` renders before a Skir method is selected, so `GetMe`'s `auth:sanctum` controller middleware does not protect the Studio page. Middleware attached to the outer Laravel route still applies to Studio and to every RPC call. Use outer route middleware when Studio itself must be private.
+
+### Middleware limitation
+
+Terminable controller middleware is not supported. A Skir method does not pass through Laravel's HTTP kernel termination phase, so the package rejects controller middleware that defines `terminate()` instead of silently skipping its termination work. Non-terminable middleware follows the normal Laravel pipeline.
+
+## Form Requests and decoded input
+
+Both ordinary Laravel `FormRequest` classes and `SkirFormRequest` subclasses use Laravel's native container resolution, input preparation, authorization, rules, and after-validation hooks. A `SkirFormRequest` additionally provides the typed `$request->skir()` method described in [Generated procedures](generated-procedures.md#request-hydration-and-validation).
+
+Failures raised while Laravel resolves these dependencies use SkirRPC error responses rather than Laravel's normal validation redirect or JSON shape:
+
+- failed validation returns HTTP `422` with error code `skir_validation_failed` and field errors in `error.details`;
+- failed Form Request authorization returns HTTP `403` with error code `skir_authorization_failed`.
+
+Exceptions thrown by controller business logic continue through Laravel's normal exception handling.
+
+Before controller middleware and Form Requests run, the server creates a method-scoped clone of the transport request. Its input bags contain only the decoded Skir method payload—not the outer RPC envelope or transport query parameters. JSON calls receive the payload in the JSON bag, GET and HEAD calls in the query bag, and other calls in the request bag. The other input bags and uploaded files are cleared.
+
+Headers, cookies, route state, session, authentication resolvers, and raw transport content remain available on the scoped request. The original container request is restored after dispatch, including when middleware, validation, authorization, hydration, or controller code throws.
+
+Object payloads can be consumed by one direct request parameter: a Form Request, a supported generated DTO, or an untyped/builtin payload parameter. Multiple direct payload parameters are ambiguous and are rejected before invocation. Object unions and intersections are also rejected; only unions made entirely from builtin types can receive a decoded payload. Route parameters, contextual attributes, `SkirContext`, and container dependencies do not count as direct payload parameters.
 
 ### Compose multiple controllers
 
 An endpoint may combine multiple controllers or routing styles:
 
 ```php
-use App\Http\Skir\AdminController;
-use App\Http\Skir\HealthController;
-use App\Http\Skir\GetUserController;
+use App\Skir\Admin\AdminController;
+use App\Skir\Admin\GetUserController;
+use App\Skir\Health\HealthController;
 use Illuminate\Support\Facades\Route;
 use Skir\Admin\AdminSkirMethod;
 use Skir\Server\Facades\Skir;
@@ -83,7 +169,7 @@ Each Skir method can be registered only once on an endpoint. Duplicate registrat
 For a controller dedicated to one method, map the generated method enum directly to its `__invoke()` method:
 
 ```php
-use App\Http\Skir\GetUserController;
+use App\Skir\Admin\GetUserController;
 use Illuminate\Support\Facades\Route;
 use Skir\Admin\AdminSkirMethod;
 use Skir\Server\Facades\Skir;
@@ -100,7 +186,7 @@ The invokable method uses the same typed request, `SkirContext`, and response co
 
 declare(strict_types=1);
 
-namespace App\Http\Skir;
+namespace App\Skir\Admin;
 
 use Skir\Admin\GetUserRequestData;
 use Skir\Admin\UserData;
@@ -230,12 +316,12 @@ Studio is controlled by these settings in `config/skir-server.php`:
 Studio is disabled by default. Enable it on an individual endpoint with `studio()`:
 
 ```php
-use App\Http\Skir\UserController;
+use App\Skir\Admin\AdminController;
 use Illuminate\Support\Facades\Route;
 use Skir\Server\Facades\Skir;
 
 Route::skirRpc('/api/skir', [
-    Skir::controller(UserController::class),
+    Skir::controller(AdminController::class),
 ])->studio();
 ```
 

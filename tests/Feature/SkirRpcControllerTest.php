@@ -7,6 +7,7 @@ namespace Skir\Server\Tests\Feature;
 use CBOR\Decoder;
 use CBOR\Encoder;
 use CBOR\StringStream;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\Test;
@@ -85,6 +86,25 @@ final class SkirRpcControllerTest extends TestCase
     }
 
     #[Test]
+    public function it_dispatches_a_head_request_from_the_query_string(): void
+    {
+        app(SkirServer::class)->addMethod(
+            new MethodDescriptor('Square', 1001, Type::float32(), Type::float32()),
+            fn (float $value): float => $value * $value,
+        );
+
+        $this
+            ->call(
+                'HEAD',
+                '/skir?method=Square&request=5.0',
+                server: ['HTTP_ACCEPT' => 'application/json'],
+            )
+            ->assertOk()
+            ->assertHeader('content-type', 'application/json')
+            ->assertContent('');
+    }
+
+    #[Test]
     public function it_registers_a_route_macro_for_skir_rpc_endpoints(): void
     {
         $route = Route::skirRpc('/rpc');
@@ -138,9 +158,20 @@ final class SkirRpcControllerTest extends TestCase
     #[Test]
     public function it_registers_procedure_providers_on_a_route(): void
     {
-        Route::skirRpc('/provider-rpc', [
+        $route = Route::skirRpc('/provider-rpc', [
             SquareProcedureProvider::class,
         ]);
+        $server = $route->defaults['skirServer'] ?? null;
+
+        $this->assertInstanceOf(SkirServer::class, $server);
+
+        $prepared = $server->procedure('Square')->prepare(
+            5.0,
+            new RequestContext(Request::create('/provider-rpc', 'POST'), TestSkirMethod::Square->descriptor()),
+        );
+
+        $this->assertSame([], $prepared->middleware);
+        $this->assertSame(25.0, $prepared->invoke());
 
         $this
             ->postJson('/provider-rpc', [

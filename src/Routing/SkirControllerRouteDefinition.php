@@ -43,7 +43,10 @@ final readonly class SkirControllerRouteDefinition implements SkirRouteDefinitio
 
             $server->addMethod(
                 $descriptor,
-                new ControllerProcedureInvoker($this->controller, $method->getName()),
+                app(ControllerProcedureInvoker::class, [
+                    'controller' => $this->controller,
+                    'method' => $method->getName(),
+                ]),
             );
         }
     }
