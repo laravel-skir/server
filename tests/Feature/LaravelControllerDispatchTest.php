@@ -14,8 +14,11 @@ use Illuminate\Routing\Attributes\Controllers\Authorize;
 use Illuminate\Routing\Attributes\Controllers\Middleware as ControllerMiddlewareAttribute;
 use Illuminate\Routing\Controller;
 use Illuminate\Routing\Controllers\HasMiddleware;
+use Illuminate\Routing\Controllers\Middleware as ControllerMiddleware;
+use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Request as RequestFacade;
 use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
@@ -111,6 +114,83 @@ final class LaravelControllerDispatchTest extends TestCase
 
         $this->assertSame(['has-middleware'], NativeDispatchRecorder::$events);
         $this->assertSame('Native Skir', $result);
+    }
+
+    #[Test]
+    public function repeatable_controller_middleware_attributes_honor_class_filters_for_the_selected_php_method(): void
+    {
+        $route = $this->registerController('/filtered-middleware', FilteredMiddlewareController::class);
+        $server = $this->serverFromRoute($route);
+        $context = $this->contextForRoute($route, NativeDispatchMethod::FilteredMiddleware);
+        $prepared = $server->procedure('FilteredMiddleware')->prepare(null, $context);
+
+        $result = (new Pipeline(app()))
+            ->send($context->request)
+            ->through($prepared->middleware)
+            ->then(fn (Request $request): mixed => $prepared->invoke());
+
+        $this->assertSame([
+            'class',
+            'class-only',
+            'method-first',
+            'method-second',
+        ], NativeDispatchRecorder::$events);
+        $this->assertSame('selected', $result);
+    }
+
+    #[Test]
+    public function legacy_laravel_controller_middleware_uses_the_selected_php_method(): void
+    {
+        $route = $this->registerController('/legacy-middleware', LegacyMiddlewareController::class);
+        $server = $this->serverFromRoute($route);
+        $context = $this->contextForRoute($route, NativeDispatchMethod::LegacyMiddleware);
+        $prepared = $server->procedure('LegacyMiddleware')->prepare(null, $context);
+
+        $result = (new Pipeline(app()))
+            ->send($context->request)
+            ->through($prepared->middleware)
+            ->then(fn (Request $request): mixed => $prepared->invoke());
+
+        $this->assertSame(['legacy'], NativeDispatchRecorder::$events);
+        $this->assertSame('legacy-selected', $result);
+    }
+
+    #[Test]
+    public function skir_method_dispatches_invokable_controllers(): void
+    {
+        Route::skirRpc('/invokable-controller', [
+            Skir::method(NativeDispatchMethod::Invokable, InvokableDispatchController::class),
+        ], SkirCodecs::standardJson());
+
+        $this
+            ->postJson('/invokable-controller', [
+                'method' => 'Invokable',
+                'request' => null,
+            ])
+            ->assertOk()
+            ->assertContent('"invoked"');
+
+        $this->assertSame(['invokable'], NativeDispatchRecorder::$events);
+    }
+
+    #[Test]
+    public function bound_enum_parameters_are_copied_from_the_outer_route(): void
+    {
+        Route::bind(
+            'routeStatus',
+            static fn (string $status): NativeNullableStatus => NativeNullableStatus::from($status),
+        );
+
+        $this->registerController('/bound-enum/{routeStatus}', BoundEnumController::class)
+            ->middleware(SubstituteBindings::class);
+
+        $this
+            ->postJson('/bound-enum/active', [
+                'method' => 'BoundEnum',
+                'request' => null,
+            ])
+            ->assertOk()
+            ->assertContent('"active"');
     }
 
     #[Test]
@@ -264,6 +344,7 @@ final class LaravelControllerDispatchTest extends TestCase
     #[Test]
     public function post_processing_middleware_wraps_dependency_validation_errors(): void
     {
+        $this->be(new GenericUser(['id' => 42]));
         $this->registerController('/pipeline-validation', RoutingPipelineController::class);
 
         $this
@@ -284,6 +365,7 @@ final class LaravelControllerDispatchTest extends TestCase
             ]);
 
         $this->assertSame(0, RoutingPipelineController::$invocations);
+        $this->assertTransportRequestStateRestored('/pipeline-validation');
     }
 
     #[Test]
@@ -331,6 +413,7 @@ final class LaravelControllerDispatchTest extends TestCase
     #[Test]
     public function codec_runtime_exceptions_keep_their_skir_envelope_inside_the_middleware_pipeline(): void
     {
+        $this->be(new GenericUser(['id' => 42]));
         Route::skirRpc('/pipeline-codec-error', [
             Skir::controller(RoutingPipelineController::class),
         ]);
@@ -348,12 +431,15 @@ final class LaravelControllerDispatchTest extends TestCase
                     'message' => 'Skir array values must be PHP arrays.',
                 ],
             ]);
+
+        $this->assertTransportRequestStateRestored('/pipeline-codec-error');
     }
 
     #[Test]
     public function unexpected_controller_exceptions_use_laravels_error_response_inside_the_middleware_pipeline(): void
     {
         config(['app.debug' => false]);
+        $this->be(new GenericUser(['id' => 42]));
         $this->registerController('/pipeline-unexpected-error', RoutingPipelineController::class);
 
         $this
@@ -364,6 +450,47 @@ final class LaravelControllerDispatchTest extends TestCase
             ->assertInternalServerError()
             ->assertHeader('X-Skir-Middleware', 'applied')
             ->assertExactJson(['message' => 'Server Error']);
+
+        $this->assertTransportRequestStateRestored('/pipeline-unexpected-error');
+    }
+
+    #[Test]
+    public function request_state_is_restored_after_controller_middleware_throws(): void
+    {
+        config(['app.debug' => false]);
+        $this->be(new GenericUser(['id' => 42]));
+        $this->registerController('/pipeline-middleware-error', RoutingPipelineController::class);
+
+        $this
+            ->postJson('/pipeline-middleware-error', [
+                'method' => 'MiddlewareFailure',
+                'request' => null,
+            ])
+            ->assertInternalServerError()
+            ->assertExactJson(['message' => 'Server Error']);
+
+        $this->assertSame(0, RoutingPipelineController::$invocations);
+        $this->assertTransportRequestStateRestored('/pipeline-middleware-error');
+    }
+
+    #[Test]
+    public function request_state_is_restored_after_payload_hydration_throws(): void
+    {
+        config(['app.debug' => false]);
+        $this->be(new GenericUser(['id' => 42]));
+        $this->registerController('/pipeline-hydration-error', RoutingPipelineController::class);
+
+        $this
+            ->postJson('/pipeline-hydration-error', [
+                'method' => 'HydrationFailure',
+                'request' => ['name' => 'Maxim'],
+            ])
+            ->assertInternalServerError()
+            ->assertHeader('X-Skir-Middleware', 'applied')
+            ->assertExactJson(['message' => 'Server Error']);
+
+        $this->assertSame(0, RoutingPipelineController::$invocations);
+        $this->assertTransportRequestStateRestored('/pipeline-hydration-error');
     }
 
     #[Test]
@@ -489,6 +616,15 @@ final class LaravelControllerDispatchTest extends TestCase
 
         return new RequestContext($request, $method->descriptor());
     }
+
+    private function assertTransportRequestStateRestored(string $path): void
+    {
+        $transportRequest = app('request');
+
+        $this->assertSame($path, $transportRequest->getPathInfo());
+        $this->assertSame($transportRequest, RequestFacade::getFacadeRoot());
+        $this->assertSame(42, $transportRequest->user()?->getAuthIdentifier());
+    }
 }
 
 enum NativeDispatchMethod implements SkirMethodReference
@@ -510,6 +646,12 @@ enum NativeDispatchMethod implements SkirMethodReference
     case PackageFailure;
     case UnexpectedFailure;
     case RuntimeCodecFailure;
+    case FilteredMiddleware;
+    case LegacyMiddleware;
+    case Invokable;
+    case BoundEnum;
+    case MiddlewareFailure;
+    case HydrationFailure;
 
     public function descriptor(): MethodDescriptor
     {
@@ -616,6 +758,42 @@ enum NativeDispatchMethod implements SkirMethodReference
                 Type::optional(Type::struct([])),
                 Type::array(Type::string()),
             ),
+            self::FilteredMiddleware => new MethodDescriptor(
+                'FilteredMiddleware',
+                6018,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::LegacyMiddleware => new MethodDescriptor(
+                'LegacyMiddleware',
+                6019,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::Invokable => new MethodDescriptor(
+                'Invokable',
+                6020,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::BoundEnum => new MethodDescriptor(
+                'BoundEnum',
+                6021,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::MiddlewareFailure => new MethodDescriptor(
+                'MiddlewareFailure',
+                6022,
+                Type::optional(Type::struct([])),
+                Type::string(),
+            ),
+            self::HydrationFailure => new MethodDescriptor(
+                'HydrationFailure',
+                6023,
+                Type::struct([Field::value('name', 0, Type::string())]),
+                Type::string(),
+            ),
         };
     }
 }
@@ -650,16 +828,62 @@ final class NativeDispatchController extends Controller
 
 final class HasMiddlewareDispatchController implements HasMiddleware
 {
-    /** @return array<int, class-string> */
+    /** @return array<int, ControllerMiddleware> */
     public static function middleware(): array
     {
-        return [NativeHasMiddleware::class];
+        return [new ControllerMiddleware(NativeHasMiddleware::class, only: ['dispatch'])];
     }
 
     #[SkirMethod(NativeDispatchMethod::HasMiddleware)]
     public function dispatch(#[Config('app.name')] string $applicationName): string
     {
         return $applicationName;
+    }
+}
+
+#[ControllerMiddlewareAttribute(NativeRecordingMiddleware::class.':class')]
+#[ControllerMiddlewareAttribute(NativeRecordingMiddleware::class.':class-only', only: ['selectedAction'])]
+#[ControllerMiddlewareAttribute(NativeRecordingMiddleware::class.':class-except', except: ['selectedAction'])]
+final class FilteredMiddlewareController
+{
+    #[SkirMethod(NativeDispatchMethod::FilteredMiddleware)]
+    #[ControllerMiddlewareAttribute(NativeRecordingMiddleware::class.':method-first')]
+    #[ControllerMiddlewareAttribute(NativeRecordingMiddleware::class.':method-second')]
+    public function selectedAction(): string
+    {
+        return 'selected';
+    }
+}
+
+final class LegacyMiddlewareController extends Controller
+{
+    public function __construct()
+    {
+        $this->middleware(NativeRecordingMiddleware::class.':legacy')->only('legacySelectedAction');
+    }
+
+    #[SkirMethod(NativeDispatchMethod::LegacyMiddleware)]
+    public function legacySelectedAction(): string
+    {
+        return 'legacy-selected';
+    }
+}
+
+#[ControllerMiddlewareAttribute(NativeRecordingMiddleware::class.':invokable', only: ['__invoke'])]
+final class InvokableDispatchController
+{
+    public function __invoke(): string
+    {
+        return 'invoked';
+    }
+}
+
+final class BoundEnumController
+{
+    #[SkirMethod(NativeDispatchMethod::BoundEnum)]
+    public function dispatch(NativeNullableStatus $routeStatus): string
+    {
+        return $routeStatus->value;
     }
 }
 
@@ -758,6 +982,7 @@ final class RoutingPipelineController
     }
 
     #[SkirMethod(NativeDispatchMethod::ValidationFailure)]
+    #[ControllerMiddlewareAttribute(ScopedUserResolverMiddleware::class)]
     #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
     public function validationFailure(PipelineValidationSkirRequest $request): string
     {
@@ -783,6 +1008,7 @@ final class RoutingPipelineController
     }
 
     #[SkirMethod(NativeDispatchMethod::UnexpectedFailure)]
+    #[ControllerMiddlewareAttribute(ScopedUserResolverMiddleware::class)]
     #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
     public function unexpectedFailure(): never
     {
@@ -790,10 +1016,39 @@ final class RoutingPipelineController
     }
 
     #[SkirMethod(NativeDispatchMethod::RuntimeCodecFailure)]
+    #[ControllerMiddlewareAttribute(ScopedUserResolverMiddleware::class)]
     #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
     public function runtimeCodecFailure(): string
     {
         return 'not-an-array';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::MiddlewareFailure)]
+    #[ControllerMiddlewareAttribute(ThrowingScopedUserResolverMiddleware::class)]
+    public function middlewareFailure(): string
+    {
+        self::$invocations++;
+
+        return 'unreachable';
+    }
+
+    #[SkirMethod(NativeDispatchMethod::HydrationFailure)]
+    #[ControllerMiddlewareAttribute(ScopedUserResolverMiddleware::class)]
+    #[ControllerMiddlewareAttribute(ResponsePostProcessingMiddleware::class)]
+    public function hydrationFailure(ThrowingHydrationPayload $request): string
+    {
+        self::$invocations++;
+
+        return 'unreachable';
+    }
+}
+
+final class ThrowingHydrationPayload
+{
+    /** @param array{name: string} $payload */
+    public static function makeFromSkirPayload(array $payload): never
+    {
+        throw new RuntimeException('Payload hydration failed.');
     }
 }
 
@@ -962,6 +1217,16 @@ final class NativeHasMiddleware
     }
 }
 
+final class NativeRecordingMiddleware
+{
+    public function handle(Request $request, Closure $next, string $event): mixed
+    {
+        NativeDispatchRecorder::$events[] = $event;
+
+        return $next($request);
+    }
+}
+
 final class MiddlewareStateInitializer
 {
     public function handle(Request $request, Closure $next): mixed
@@ -1035,6 +1300,30 @@ final class ResponsePostProcessingMiddleware
         $response->headers->set('X-Skir-Middleware', 'applied');
 
         return $response;
+    }
+}
+
+final class ScopedUserResolverMiddleware
+{
+    public function handle(Request $request, Closure $next): mixed
+    {
+        $request->setUserResolver(
+            static fn (): GenericUser => new GenericUser(['id' => 99]),
+        );
+
+        return $next($request);
+    }
+}
+
+final class ThrowingScopedUserResolverMiddleware
+{
+    public function handle(Request $request, Closure $next): never
+    {
+        $request->setUserResolver(
+            static fn (): GenericUser => new GenericUser(['id' => 99]),
+        );
+
+        throw new RuntimeException('Controller middleware failed.');
     }
 }
 

@@ -256,6 +256,32 @@ final class NullableControllerRequestTest extends TestCase
             ->assertExactJson(['method' => 'ContextOnly']);
     }
 
+    #[Test]
+    public function context_only_methods_ignore_a_decoded_payload_argument(): void
+    {
+        $this->registerRoute(NullableRequestMethod::ContextOnly, ContextOnlyController::class);
+
+        $this->postJson('/context-only', [
+            'method' => 'ContextOnly',
+            'request' => [],
+        ])
+            ->assertOk()
+            ->assertExactJson(['method' => 'ContextOnly']);
+    }
+
+    #[Test]
+    public function no_payload_methods_are_invoked_without_a_decoded_payload_argument(): void
+    {
+        $this->registerRoute(NullableRequestMethod::NoPayload, NoPayloadController::class);
+
+        $this->postJson('/no-payload', [
+            'method' => 'NoPayload',
+            'request' => [],
+        ])
+            ->assertOk()
+            ->assertExactJson(['received' => 'no-payload']);
+    }
+
     private function registerRoute(
         NullableRequestMethod $method,
         string $controller,
@@ -307,6 +333,7 @@ final class NullableControllerRequestTest extends TestCase
             NullableRequestMethod::NonnullableEnum => '/nonnullable-enum',
             NullableRequestMethod::NonnullableData => '/nonnullable-data',
             NullableRequestMethod::ContextOnly => '/context-only',
+            NullableRequestMethod::NoPayload => '/no-payload',
         };
     }
 }
@@ -325,6 +352,7 @@ enum NullableRequestMethod implements SkirMethodReference
     case NonnullableEnum;
     case NonnullableData;
     case ContextOnly;
+    case NoPayload;
 
     public function descriptor(): MethodDescriptor
     {
@@ -334,6 +362,7 @@ enum NullableRequestMethod implements SkirMethodReference
             self::NonnullableEnum,
             self::NonnullableData => Type::struct([]),
             self::ContextOnly => Type::struct([]),
+            self::NoPayload => Type::struct([]),
             default => Type::optional(Type::struct([])),
         };
 
@@ -355,6 +384,7 @@ enum NullableRequestMethod implements SkirMethodReference
             self::DefaultDenyFormRequest => 10,
             self::CustomDenyFormRequest => 11,
             self::LaravelFormRequest => 12,
+            self::NoPayload => 13,
         };
     }
 }
@@ -642,5 +672,13 @@ final class ContextOnlyController
     public function __invoke(SkirContext $context): array
     {
         return ['method' => $context->method->name];
+    }
+}
+
+final class NoPayloadController
+{
+    public function __invoke(): array
+    {
+        return ['received' => 'no-payload'];
     }
 }

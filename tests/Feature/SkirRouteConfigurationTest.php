@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Skir\Server\Tests\Feature;
 
+use Closure;
 use Illuminate\Container\Attributes\Bind;
 use Illuminate\Contracts\Container\BindingResolutionException;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Attributes\Controllers\Middleware as ControllerMiddlewareAttribute;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Route;
 use LogicException;
@@ -150,6 +153,26 @@ final class SkirRouteConfigurationTest extends TestCase
             ['RouteDefinitionMethod', 'ProcedureProviderMethod'],
             array_keys($this->serverFromRoute($route)->procedures()),
         );
+    }
+
+    #[Test]
+    public function manual_and_generated_style_providers_do_not_run_controller_middleware(): void
+    {
+        ProviderControllerMiddleware::$invocations = 0;
+
+        Route::skirRpc('/provider-controller-middleware', [
+            new MiddlewareDecoratedProcedureProvider,
+        ]);
+
+        $this
+            ->postJson('/provider-controller-middleware', [
+                'method' => 'ProviderWithoutControllerMiddleware',
+                'request' => 'value',
+            ])
+            ->assertOk()
+            ->assertContent('"value"');
+
+        $this->assertSame(0, ProviderControllerMiddleware::$invocations);
     }
 
     #[Test]
@@ -316,6 +339,35 @@ final class OrderedProcedureProvider implements ProcedureProvider
             new MethodDescriptor('ProcedureProviderMethod', 5006, Type::string(), Type::string()),
             fn (string $request): string => $request,
         );
+    }
+}
+
+#[ControllerMiddlewareAttribute(ProviderControllerMiddleware::class)]
+final class MiddlewareDecoratedProcedureProvider implements ProcedureProvider
+{
+    public function register(SkirServer $server): void
+    {
+        $server->addMethod(
+            new MethodDescriptor(
+                'ProviderWithoutControllerMiddleware',
+                5009,
+                Type::string(),
+                Type::string(),
+            ),
+            fn (string $request): string => $request,
+        );
+    }
+}
+
+final class ProviderControllerMiddleware
+{
+    public static int $invocations = 0;
+
+    public function handle(Request $request, Closure $next): mixed
+    {
+        self::$invocations++;
+
+        return $next($request);
     }
 }
 

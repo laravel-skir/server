@@ -12,7 +12,9 @@ use InvalidArgumentException;
 use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
+use ReflectionParameter;
 use Skir\Server\Contracts\PreparesProcedure;
+use Skir\Server\Exceptions\AmbiguousControllerRequestException;
 use Skir\Server\Http\Requests\SkirFormRequest;
 use Skir\Server\Http\Requests\SkirFormRequestResolver;
 use Skir\Server\Hydration\SkirPayloadHydrator;
@@ -100,6 +102,21 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
         $values = [];
         $nullParameterIndexes = [];
         $outerRoute = $context->request->route();
+        $directRequestParameters = array_values(array_filter(
+            $reflection->getParameters(),
+            fn (ReflectionParameter $parameter): bool => $this->isDirectRequestParameter($parameter, $outerRoute),
+        ));
+
+        if (count($directRequestParameters) > 1) {
+            throw AmbiguousControllerRequestException::forController(
+                $this->controller,
+                $this->method,
+                array_map(
+                    static fn (ReflectionParameter $parameter): string => $parameter->getName(),
+                    $directRequestParameters,
+                ),
+            );
+        }
 
         foreach ($reflection->getParameters() as $parameterIndex => $parameter) {
             if (Util::getContextualAttributeFromDependency($parameter) !== null) {
@@ -183,6 +200,40 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
         }
 
         return new PreparedControllerParameters($values, $nullParameterIndexes);
+    }
+
+    private function isDirectRequestParameter(
+        ReflectionParameter $parameter,
+        mixed $outerRoute,
+    ): bool {
+        if (Util::getContextualAttributeFromDependency($parameter) !== null) {
+            return false;
+        }
+
+        $type = $parameter->getType();
+        $typeName = $type instanceof ReflectionNamedType ? $type->getName() : null;
+
+        if ($typeName === SkirContext::class || $typeName === RequestContext::class) {
+            return false;
+        }
+
+        if ($outerRoute instanceof Route && $outerRoute->hasParameter($parameter->getName())) {
+            return false;
+        }
+
+        if ($this->isFormRequest($typeName) || $this->isLaravelFormRequest($typeName)) {
+            return true;
+        }
+
+        if ($typeName === null) {
+            return true;
+        }
+
+        if ($type->isBuiltin()) {
+            return true;
+        }
+
+        return $this->payloadHydrator->supports($typeName);
     }
 
     private function isFormRequest(?string $typeName): bool

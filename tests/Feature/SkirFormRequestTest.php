@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace Skir\Server\Tests\Feature;
 
+use Closure;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Foundation\Http\Middleware\TrimStrings;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Attributes\Controllers\Middleware as ControllerMiddlewareAttribute;
+use Illuminate\Support\Facades\Request as RequestFacade;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use Illuminate\Validation\ValidationException;
@@ -19,6 +23,7 @@ use Skir\Runtime\MethodDescriptor;
 use Skir\Runtime\Type;
 use Skir\Server\Codecs\SkirCodecs;
 use Skir\Server\Contracts\SkirMethodReference;
+use Skir\Server\Exceptions\AmbiguousControllerRequestException;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
 use Skir\Server\Hydration\SkirPayloadHydrator;
@@ -433,6 +438,42 @@ final class SkirFormRequestTest extends TestCase
                 'id' => 42,
                 'name' => 'Maxim directly injected',
             ]);
+    }
+
+    #[Test]
+    public function it_rejects_multiple_direct_skir_request_parameters_before_hydration(): void
+    {
+        AmbiguousResolverMutationMiddleware::$invocations = 0;
+        $this->be(new GenericUser(['id' => 42]));
+        Route::skirRpc('/ambiguous-direct-payload-rpc', [
+            Skir::method(FormRequestSkirMethod::AmbiguousDirectUser, AmbiguousDirectPayloadController::class),
+        ], SkirCodecs::standardJson());
+
+        $this->withoutExceptionHandling();
+
+        try {
+            $this->postJson('/ambiguous-direct-payload-rpc', [
+                'method' => 'AmbiguousDirectUser',
+                'request' => [
+                    'id' => 42,
+                    'name' => 'Maxim',
+                ],
+            ]);
+
+            $this->fail('An ambiguous direct request signature was dispatched.');
+        } catch (AmbiguousControllerRequestException $exception) {
+            $this->assertSame(
+                'Skir controller ['.AmbiguousDirectPayloadController::class.'::__invoke] has multiple direct request parameters [$primary, $secondary].',
+                $exception->getMessage(),
+            );
+        }
+
+        $transportRequest = app('request');
+
+        $this->assertSame(1, AmbiguousResolverMutationMiddleware::$invocations);
+        $this->assertSame('/ambiguous-direct-payload-rpc', $transportRequest->getPathInfo());
+        $this->assertSame($transportRequest, RequestFacade::getFacadeRoot());
+        $this->assertSame(42, $transportRequest->user()?->getAuthIdentifier());
     }
 
     #[Test]
@@ -1041,6 +1082,32 @@ final class DirectPayloadController
     }
 }
 
+#[ControllerMiddlewareAttribute(AmbiguousResolverMutationMiddleware::class)]
+final class AmbiguousDirectPayloadController
+{
+    public function __invoke(
+        FromArrayUserPayload $primary,
+        FromArrayUserPayload $secondary,
+    ): FromArrayUserPayload {
+        return $primary;
+    }
+}
+
+final class AmbiguousResolverMutationMiddleware
+{
+    public static int $invocations = 0;
+
+    public function handle(Request $request, Closure $next): mixed
+    {
+        self::$invocations++;
+        $request->setUserResolver(
+            static fn (): GenericUser => new GenericUser(['id' => 99]),
+        );
+
+        return $next($request);
+    }
+}
+
 final class ContextFormController
 {
     /** @var array<string, mixed> */
@@ -1117,6 +1184,7 @@ enum FormRequestSkirMethod implements SkirMethodReference
 {
     case RenameUser;
     case DirectUser;
+    case AmbiguousDirectUser;
 
     public function descriptor(): MethodDescriptor
     {
@@ -1134,6 +1202,12 @@ enum FormRequestSkirMethod implements SkirMethodReference
         return match ($this) {
             self::RenameUser => new MethodDescriptor('RenameUser', 3001, $renameUserType, $renameUserType),
             self::DirectUser => new MethodDescriptor('DirectUser', 3002, $directUserType, $directUserType),
+            self::AmbiguousDirectUser => new MethodDescriptor(
+                'AmbiguousDirectUser',
+                3003,
+                $directUserType,
+                $directUserType,
+            ),
         };
     }
 }
