@@ -7,7 +7,6 @@ namespace Skir\Server\Http\Requests;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Routing\Redirector;
-use Illuminate\Validation\ValidationException;
 use Skir\Server\Exceptions\SkirServerException;
 use Skir\Server\SkirContext;
 use Symfony\Component\HttpFoundation\InputBag;
@@ -19,32 +18,10 @@ final readonly class SkirFormRequestResolver
         private Redirector $redirector,
     ) {}
 
-    /**
-     * @template TRequest of SkirFormRequest
-     *
-     * @param  class-string<TRequest>  $requestClass
-     * @param  array<string, mixed>  $decodedPayload
-     * @return TRequest
-     */
-    public function resolve(string $requestClass, array $decodedPayload, SkirContext $context): SkirFormRequest
-    {
-        $resolvedRequest = $this->makeRequest($requestClass, $decodedPayload, $context);
-
-        try {
-            $resolvedRequest->validateResolved();
-        } catch (ValidationException $exception) {
-            throw SkirServerException::validationFailed($exception->errors());
-        } catch (AuthorizationException) {
-            throw SkirServerException::authorizationFailed();
-        }
-
-        return $resolvedRequest;
-    }
-
     /** @param class-string<SkirFormRequest> $requestClass */
     public function authorizeNull(string $requestClass, SkirContext $context): SkirFormRequest
     {
-        $resolvedRequest = $this->makeRequest($requestClass, [], $context);
+        $resolvedRequest = $this->makeRequest($requestClass, $context);
 
         try {
             $resolvedRequest->authorizeResolved();
@@ -59,10 +36,9 @@ final readonly class SkirFormRequestResolver
      * @template TRequest of SkirFormRequest
      *
      * @param  class-string<TRequest>  $requestClass
-     * @param  array<string, mixed>  $decodedPayload
      * @return TRequest
      */
-    private function makeRequest(string $requestClass, array $decodedPayload, SkirContext $context): SkirFormRequest
+    private function makeRequest(string $requestClass, SkirContext $context): SkirFormRequest
     {
         $resolvedRequest = new $requestClass;
 
@@ -75,7 +51,6 @@ final readonly class SkirFormRequestResolver
         $resolvedRequest->request->replace([]);
         $resolvedRequest->files->replace([]);
         $resolvedRequest->setJson(new InputBag);
-        $resolvedRequest->replace($decodedPayload);
 
         return $resolvedRequest;
     }

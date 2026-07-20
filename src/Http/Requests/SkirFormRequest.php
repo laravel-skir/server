@@ -23,8 +23,9 @@ abstract class SkirFormRequest extends FormRequest
     final public function skir(): object
     {
         $hydrator = $this->container->make(SkirPayloadHydrator::class);
+        $preparedPayload = $this->all();
 
-        return $hydrator->hydrate($this->skirClass(), $this->all());
+        return $hydrator->hydrate($this->skirClass(), $preparedPayload);
     }
 
     /** @return class-string<TSkir> */

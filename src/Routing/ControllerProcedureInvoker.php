@@ -136,16 +136,21 @@ final readonly class ControllerProcedureInvoker implements PreparesProcedure
                     throw new InvalidArgumentException('Skir Form Requests require a decoded array/object payload.');
                 }
 
-                /** @var class-string<SkirFormRequest> $typeName */
-                $values[] = $this->formRequestResolver->resolve($typeName, $request, $context);
-
                 continue;
             }
 
             if ($this->isLaravelFormRequest($typeName)) {
-                throw new InvalidArgumentException(
-                    'Skir controller Form Requests must extend ['.SkirFormRequest::class.'].',
-                );
+                if ($request === null && $type?->allowsNull()) {
+                    throw new InvalidArgumentException(
+                        'Nullable Skir controller Form Requests must extend ['.SkirFormRequest::class.'].',
+                    );
+                }
+
+                if (! is_array($request)) {
+                    throw new InvalidArgumentException('Laravel Form Requests require a decoded array/object payload.');
+                }
+
+                continue;
             }
 
             if ($request === null && $type?->allowsNull()) {

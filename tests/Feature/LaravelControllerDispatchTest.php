@@ -23,6 +23,7 @@ use Skir\Server\Codecs\SkirCodecs;
 use Skir\Server\Contracts\SkirMethodReference;
 use Skir\Server\Facades\Skir;
 use Skir\Server\Http\Requests\SkirFormRequest;
+use Skir\Server\Http\Requests\SkirMethodRequestScope;
 use Skir\Server\RegisteredProcedure;
 use Skir\Server\RequestContext;
 use Skir\Server\SkirContext;
@@ -142,7 +143,11 @@ final class LaravelControllerDispatchTest extends TestCase
         $result = (new Pipeline(app()))
             ->send($context->request)
             ->through($prepared->middleware)
-            ->then(fn (Request $request): mixed => $prepared->invoke());
+            ->then(fn (Request $request): mixed => app(SkirMethodRequestScope::class)->run(
+                $request,
+                ['name' => 'Maxim'],
+                static fn (): mixed => $prepared->invoke(),
+            ));
 
         $this->assertSame('Maxim', $result);
         $this->assertSame(1, MiddlewareStateSkirRequest::$authorizations);
