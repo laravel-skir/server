@@ -127,7 +127,7 @@ final class UpdateMeFormRequest extends SkirFormRequest
 }
 ```
 
-Laravel completes authorization, input preparation, and validation before the controller runs. Calling `$request->skir()` then hydrates the prepared input through the appropriate factory: `makeFromSkirPayload()` for Simple Data Objects and Laravel Data, or `fromArray()` for standard PHP. Ordinary Laravel Form Requests are also supported when typed DTO access is unnecessary.
+Laravel completes input preparation, authorization, and validation before the controller runs. Calling `$request->skir()` then hydrates the complete prepared `$request->all()` bag—not only `$request->validated()`—through the appropriate factory: `makeFromSkirPayload()` for Simple Data Objects and Laravel Data, or `fromArray()` for standard PHP. This retains decoded schema fields when semantic Form Request rules intentionally cover only a subset. Ordinary Laravel Form Requests are also supported when typed DTO access is unnecessary.
 
 See [Scaffolding](scaffolding.md) to generate this class and [Routing](routing.md#form-requests-and-decoded-input) for the request lifecycle.
 
