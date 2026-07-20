@@ -32,7 +32,9 @@ The local `feature/laravel-scaffolding` branch already implements `SkirFormReque
 
 ## Architecture
 
-The package will compose Laravel's existing routing components rather than subclassing `ControllerDispatcher`. Subclassing would couple the package to protected framework internals, while composition keeps the Skir-specific adapter explicit.
+The package will compose Laravel's router, route metadata, and middleware pipeline, and add a thin `SkirControllerDispatcher` subclass of Laravel's `ControllerDispatcher`. The subclass is limited to the parameter-resolution seam required to seed decoded Skir values, preserve nullable Form Request arguments, and translate validation or authorization failures raised while Laravel resolves dependencies. It continues to use Laravel's own dependency resolver and `callAction()` convention instead of maintaining a parallel reflection dispatcher.
+
+This controlled Laravel 13 extension is preferable to copying controller middleware discovery or dependency resolution. Focused compatibility tests will fail if a Laravel 13 minor release changes the inherited dispatcher contract.
 
 The dispatch lifecycle will be:
 
