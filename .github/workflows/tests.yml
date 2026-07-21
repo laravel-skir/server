@@ -59,6 +59,114 @@ jobs:
         run: composer test
         working-directory: server
 
+  boost-assets:
+    name: Laravel Boost assets (${{ matrix.scenario }})
+    needs: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - server
+          - both
+
+    steps:
+      - name: Checkout server
+        uses: actions/checkout@v7
+        with:
+          path: server
+
+      - name: Checkout runtime
+        uses: actions/checkout@v7
+        with:
+          repository: php-skir/runtime
+          path: runtime
+
+      - name: Checkout client
+        uses: actions/checkout@v7
+        with:
+          repository: php-skir/client
+          path: client
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate Composer archive assets
+        if: matrix.scenario == 'server'
+        working-directory: server
+        run: |
+          composer archive --format=zip --dir=build/archive
+          unzip -Z1 build/archive/*.zip > build/archive-files.txt
+          for asset in \
+            resources/boost/guidelines/core.blade.php \
+            resources/boost/skills/skir-server-development/SKILL.md \
+            resources/boost/skills/skir-server-development/references/procedures-and-routing.md \
+            resources/boost/skills/skir-server-development/references/scaffolding.md \
+            resources/boost/skills/skir-server-development/references/structures-and-validation.md \
+            resources/boost/skills/skir-server-development/references/studio-codecs-and-testing.md
+          do
+            grep -Fxq "$asset" build/archive-files.txt
+          done
+
+      - name: Create Laravel 13 consumer
+        run: composer create-project laravel/laravel:^13.0 "boost-${{ matrix.scenario }}" --prefer-dist --no-interaction --no-progress
+
+      - name: Install copied Skir packages and Boost
+        working-directory: boost-${{ matrix.scenario }}
+        run: |
+          composer config minimum-stability dev
+          composer config prefer-stable true
+          composer config repositories.runtime '{"type":"path","url":"../runtime","options":{"symlink":false}}' --json
+          composer config repositories.client '{"type":"path","url":"../client","options":{"symlink":false}}' --json
+          composer config repositories.server '{"type":"path","url":"../server","options":{"symlink":false}}' --json
+          if [ "${{ matrix.scenario }}" = 'both' ]
+          then
+            composer require php-skir/server:dev-main php-skir/client:dev-main --no-interaction --no-progress
+          else
+            composer require php-skir/server:dev-main --no-interaction --no-progress
+          fi
+          composer require laravel/boost:^2.4 --dev --no-interaction --no-progress
+          test ! -L vendor/php-skir/server
+          if [ "${{ matrix.scenario }}" = 'both' ]
+          then
+            test ! -L vendor/php-skir/client
+          fi
+
+      - name: Install and verify server assistance
+        working-directory: boost-${{ matrix.scenario }}
+        run: |
+          if [ "${{ matrix.scenario }}" = 'both' ]
+          then
+            php -r 'file_put_contents("boost.json", json_encode(["agents" => ["codex"], "guidelines" => true, "mcp" => false, "packages" => ["php-skir/client", "php-skir/server"], "skills" => ["skir-client-development", "skir-server-development"]], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES).PHP_EOL);'
+          else
+            php -r 'file_put_contents("boost.json", json_encode(["agents" => ["codex"], "guidelines" => true, "mcp" => false, "packages" => ["php-skir/server"], "skills" => ["skir-server-development"]], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES).PHP_EOL);'
+          fi
+          php artisan boost:update --no-interaction
+          grep -Fq 'php-skir/server' AGENTS.md
+          test -f .agents/skills/skir-server-development/SKILL.md
+          test -f .agents/skills/skir-server-development/references/procedures-and-routing.md
+          test -f .agents/skills/skir-server-development/references/scaffolding.md
+          test -f .agents/skills/skir-server-development/references/structures-and-validation.md
+          test -f .agents/skills/skir-server-development/references/studio-codecs-and-testing.md
+          if [ "${{ matrix.scenario }}" = 'both' ]
+          then
+            grep -Fq 'php-skir/client' AGENTS.md
+            test -f .agents/skills/skir-client-development/SKILL.md
+            test -f .agents/skills/skir-client-development/references/generation-and-configuration.md
+            test -f .agents/skills/skir-client-development/references/invocation-errors-and-testing.md
+            test "$(find .agents/skills -mindepth 1 -maxdepth 1 -type d -name 'skir-*' | wc -l)" -eq 2
+          else
+            test ! -e .agents/skills/skir-client-development
+            test "$(find .agents/skills -mindepth 1 -maxdepth 1 -type d -name 'skir-*' | wc -l)" -eq 1
+          fi
+
   coverage:
     name: Coverage
     needs: tests
